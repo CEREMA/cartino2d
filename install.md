@@ -9,13 +9,14 @@
 Avant de commencer, assurez-vous :
 - D’avoir les **droits d’administration** sur votre machine.
 - D’utiliser un **système d’exploitation Windows**.
+- Prendre en main **Telemac 2D** avant de vous lancer dans Cartino2D ([http://www.opentelemac.org/](http://www.opentelemac.org/))
 
 ---
 
 ### 2. Installation de QGIS
 - Téléchargez et installez **QGIS** depuis : [https://qgis.org/](https://qgis.org/)
   **Chemin d’installation recommandé** : `C:\QGIS`
-- **Attention** : Si le fichier `grass.bat` ne fonctionne pas correctement, installez **GRASS GIS** depuis : [https://grass.osgeo.org/](https://grass.osgeo.org/)
+- **Attention** : Si le fichier `grassxxx.bat` appelé dans Cartino2D ne fonctionne pas correctement, installez **GRASS GIS** depuis : [https://grass.osgeo.org/](https://grass.osgeo.org/).
 
 ---
 
@@ -114,11 +115,13 @@ Avant de commencer, assurez-vous :
 - **RStudio** s’ouvrira automatiquement.
 - Dans l’interface, installez les librairies demandées.
 - Cliquez sur **Source** pour commencer à utiliser Cartino2D de manière autonome.
-- Des exemples sont fournis en cliquant sur l'étape 0 de C2D
+- Des exemples sont fournis en cliquant sur l'étape 0 de C2D.
+- Les fichiers utilisateurs sont à modifier manuellement dans le dossier C2D_ParamUser
 
 ---
 
 **Remarque** :
 Les utilisateurs sont invités à suivre ces instructions avec attention pour une installation réussie. **Aucune hotline n’est fournie.**
+Les auteurs ne s’engagent pas à prendre en compte les demandes externes et ne sont pas responsables des données produites par les utilisateurs.
 
 Bonne utilisation !
