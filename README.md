@@ -37,7 +37,7 @@ Cartino2D (« CARTographie des INOndations 2D ») est une suite de routines R po
 Cartino2D a été déposé à l’[Agence de Protection des Programmes (APP)](https://secure2.iddn.org/app.server/certificate/?sn=2023240031000&key=f1b340d417b4cbd12af52d26f7bdacee869d9477484e00c394e699e761733d67&lang=fr) en 2024, avec un renouvellement en 2025.
 
 **Collaborations** :
-Ce projet est le fruit d’échanges avec les partenaires cités en objet, en particulier **l’Université Gustave Eiffel et l’INRAE** depuis de nombreuses années comme la collaboration de l'[ANR PICS] (https://anr.fr/Projet-ANR-17-CE03-0011) (ANR-17-CE03-0011)
+Ce projet est le fruit d’échanges avec les partenaires cités en objet, en particulier **l’Université Gustave Eiffel et l’INRAE** depuis de nombreuses années comme la collaboration de l'[ANR PICS](https://anr.fr/Projet-ANR-17-CE03-0011) (ANR-17-CE03-0011)
 
 ---
 ### Configuration requise
