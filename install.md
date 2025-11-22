@@ -67,13 +67,14 @@ Avant de commencer, assurez-vous :
     pip --version
     ```
   - Si les versions s’affichent, l’installation est correcte.
+  - Si des versions plus récentes existent, suivre l'installation proposée dans la console.
 - Installez les bibliothèques requises :
   ```bash
   pip install numpy scipy matplotlib
   ```
 - Ajoutez Python au PATH (si ce n’est pas déjà fait)
 - Ouvrez les **variables d’environnement** (recherchez "Environnement" dans le menu Démarrer).
-- Ajoutez le chemin d’installation de Python (ex: `C:\Python310`) à la variable **Path**.
+- Ajoutez le chemin d’installation de Python (ex: `C:\PythonXXX`) à la variable **Path**.
 
 ---
 

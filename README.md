@@ -1,6 +1,6 @@
 # Cartino2D
 
-**Cartino2D** – Automatisation des modèles hydrauliques 2D pour la CARTgraphie des INOndations
+**Cartino2D** – Automatisation des modèles hydrauliques 2D pour la CARTgraphie des INOndations 2D
 ---
 ## Version
 Première version référencée sur GitHub.
@@ -28,16 +28,16 @@ Première version référencée sur GitHub.
 Cartino2D (« CARTographie des INOndations 2D ») est une suite de routines R pour automatiser les calculs avec **Telemac-2D**. Il s’inscrit dans la continuité de [Cartino1D](https://github.com/CEREMA/cartino1D).
 
 **Développé dans le cadre de** :
-- L’ANR MUFFINS (Projet-ANR-21-CE04-0021).
-- **Des** conventions de R&D pour le PAPI 3 (Vistre, secteur de Nîmes).
-- **Des** conventions de R&D sur le ruissellement pour la Métropole Aix-Marseille-Provence.
-- L’expérimentation de la cartographie nationale des inondations (DGPR).
+- L’[**ANR MUFFINS**](https://anr.fr/Projet-ANR-21-CE04-0021) (Projet-ANR-21-CE04-0021).
+- Des conventions de R&D pour le [**PAPI 3 Vistre**](https://papi3.vistre-vistrenque.fr/synthese-programme) (secteur de Nîmes).
+- Des conventions de R&D sur le ruissellement pour la [**Métropole Aix-Marseille-Provence**](https://deliberations.ampmetropole.fr/documents/metropole/deliberations/2023/03/16/ANNEXE/49593_49593_cerema_annexe.pdf).
+- L’expérimentation de la **cartographie nationale des inondations** (DGPR).
 
 **Dépôt légal** :
 Cartino2D a été déposé à l’[Agence de Protection des Programmes (APP)](https://secure2.iddn.org/app.server/certificate/?sn=2023240031000&key=f1b340d417b4cbd12af52d26f7bdacee869d9477484e00c394e699e761733d67&lang=fr) en 2024, avec un renouvellement en 2025.
 
 **Collaborations** :
-Ce projet est le fruit d’échanges avec les partenaires cités en objet, en particulier **l’Université Gustave Eiffel et l’INRAE**.
+Ce projet est le fruit d’échanges avec les partenaires cités en objet, en particulier **l’Université Gustave Eiffel et l’INRAE** depuis de nombreuses années comme la collaboration de l'[ANR PICS] (https://anr.fr/Projet-ANR-17-CE03-0011) (ANR-17-CE03-0011)
 
 ---
 ### Configuration requise
