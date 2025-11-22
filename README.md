@@ -12,7 +12,8 @@ Première version référencée sur GitHub.
 
 ---
 ## Objet de Cartino2D
-**Cartino2D (C2D)** est un cadre automatisé pour déployer des modèles hydrauliques 2D résolvant les équations de Saint-Venant (via **Telemac-2D**), intégrant pluie, infiltration et débits. Il permet de :
+**Cartino2D (C2D)**, développé par le [Cerema](https://www.cerema.fr/fr), est un cadre automatisé pour déployer des modèles hydrauliques 2D résolvant les équations de Saint-Venant (via **Telemac-2D**), intégrant pluie, infiltration et débits. 
+Il permet de :
 - Générer automatiquement des maillages adaptés au relief (structurés ou non).
 - Gérer des ouvrages hydrauliques et des sections de contrôle.
 - Spatialiser les paramètres et données d’entrée (rugosité, Curve Number, pluie, débit, etc.) à partir de bases géospatiales hétérogènes.
@@ -58,16 +59,16 @@ Une expérience autonome avec **Telemac-2D** est nécessaire.
      - **C2D-Débits** : Simulation d’inondation dans les plaines alluviales, forcée par des apports de débits (statistiques ou observés).
 
 2. **Génération automatique de maillages**
-   - Maillages non structurés (via **GMSH**) adaptés au relief, avec affinement le long des talwegs.
+   - Maillages non structurés (via [**GMSH**](https://gmsh.info/)) adaptés au relief, avec affinement le long des talwegs.
    - Maillages multi-types : grille carrée (deux triangles par carré) pour grands domaines.
    - Gestion topographique des limites (buffers + pente artificielle) pour des conditions aux limites stables.
 
 3. **Ingestion et traitement des données**
-   - Prise en charge de la pluie homogène (moyenne sur un bassin) ou spatialisée (radar ANTILOPE, produits statistiques SHYREG).
-   - Injection de débits ponctuels (base SHYREG), mode « permanent » privilégié pour les approches statistiques.
+   - Prise en charge de la pluie homogène (moyenne sur un bassin) ou spatialisée (radar ANTILOPE, produits statistiques [SHYREG]( https://shyreg.pluie.recover.inrae.fr).
+   - Injection de débits ponctuels (base [SHYREG](https://shyreg.recover.inrae.fr/).), mode « permanent » privilégié pour les approches statistiques.
 
 4. **Paramétrisation spatiale automatique**
-   - Rugosité hydraulique (Strickler) : assignation via bases d’occupation du sol (BDTopo, OSM, RPG, Urban Atlas, CLC, etc.).
+   - Rugosité hydraulique (Strickler) : assignation via bases d’occupation du sol ([BDTopo](https://geoservices.ign.fr/bdtopo), [OSM](https://www.openstreetmap.org), [RPG](geoservices.ign.fr/rpg), [European Urban Atlas](https://land.copernicus.eu/en/products/urban-atlas), [OCSGE](https://geoservices.ign.fr/ocsge), [CLC](https://land.copernicus.eu/en/products/corine-land-cover), etc.).
    - Paramètres de ruissellement (Curve Number, SCS-CN) : mosaïque multi-sources, rasterisation (1 m par défaut), résampling (5 m, 25 m).
 
 5. **Représentation d’ouvrages hydrauliques**
@@ -81,7 +82,7 @@ Une expérience autonome avec **Telemac-2D** est nécessaire.
    - Nettoyage et fusion des petits bassins orphelins.
 
 7. **Pré-traitements topographiques**
-   - Outils **FILINO** pour filtrer/traiter les DTM LiDAR.
+   - Outils **FILINO** pour filtrer/traiter les MNT LiDAR.
    - Plugin QGIS **OHFLASH** pour vérifier les données SIG et identifier les ouvrages/dépressions.
 
 8. **Sorties, analyses et contrôles**
@@ -91,7 +92,7 @@ Une expérience autonome avec **Telemac-2D** est nécessaire.
 
 9. **Échelle d’application et performances**
    - Multi-échelle : du national (France, 25 m) au métrique fin (maillage non structuré 3–25 m en zones urbaines).
-   - Calcul distribué : traitements parallèles, tests sur HPC (CEREMA, GENCI).
+   - Calcul distribué : traitements parallèles, tests sur HPC (CEREMA, [GENCI](https://www.genci.fr) - AD012A14287, AD012A14287R1 et AD012A14287R2).
 
 10. **Limites et précautions**
     - Hypothèses non modélisées : barrages activement opérés, brèches de digues, submersions marines dynamiques, transport solide/débris, pompages et transvasements...
