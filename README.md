@@ -12,7 +12,7 @@ Première version référencée sur GitHub.
 
 ---
 ## Objet de Cartino2D
-**Cartino2D (C2D)**, développé par le [Cerema](https://www.cerema.fr/fr), est un cadre automatisé pour déployer des modèles hydrauliques 2D résolvant les équations de Saint-Venant (via **Telemac-2D**), intégrant pluie, infiltration et débits. 
+**Cartino2D (C2D)**, développé par le [Cerema](https://www.cerema.fr/fr), est un cadre automatisé pour déployer des modèles hydrauliques 2D résolvant les équations de Saint-Venant (via (**Telemac-2D**)[https://www.opentelemac.org/]), intégrant pluie, infiltration et débits. 
 Il permet de :
 - Générer automatiquement des maillages adaptés au relief (structurés ou non).
 - Gérer des ouvrages hydrauliques et des sections de contrôle.
@@ -29,16 +29,20 @@ Il permet de :
 Cartino2D (« CARTographie des INOndations 2D ») est une suite de routines R pour automatiser les calculs avec **Telemac-2D**. Il s’inscrit dans la continuité de [Cartino1D](https://github.com/CEREMA/cartino1D).
 
 **Développé dans le cadre de** :
-- L’[**ANR MUFFINS**](https://anr.fr/Projet-ANR-21-CE04-0021) (Projet-ANR-21-CE04-0021).
+- Des conventions de R&D pour le [**PAPI des Petits Côtiers Toulonnais**](https://metropoletpm.fr/nos-missions/cadre-de-vie-environnement/prevenir-des-inondations-et-papi-pct)
+- Des travaux d'aléas sur les communes de Montepellier et Castelnau-le-Lez pour la [**DDTM34**](https://www.herault.gouv.fr/Actions-de-l-Etat/Environnement-eau-chasse-risques-naturels-et-technologiques/Risques-naturels-et-technologiques/Transmission-des-informations-aux-maires-TIM/Les-Porter-a-connaissance-PAC-de-l-Herault/MONTPELLIER)
+- L'[**ANR PICS**](https://anr.fr/Projet-ANR-17-CE03-0011) (ANR-17-CE03-0011) piloté par [**l’Université Gustave Eiffel**](https://www.univ-gustave-eiffel.fr/)
 - Des conventions de R&D pour le [**PAPI 3 Vistre**](https://papi3.vistre-vistrenque.fr/synthese-programme) (secteur de Nîmes).
 - Des conventions de R&D sur le ruissellement pour la [**Métropole Aix-Marseille-Provence**](https://deliberations.ampmetropole.fr/documents/metropole/deliberations/2023/03/16/ANNEXE/49593_49593_cerema_annexe.pdf).
+- L’[**ANR MUFFINS**](https://anr.fr/Projet-ANR-21-CE04-0021) (Projet-ANR-21-CE04-0021) piloté par l'[**INRAE**](https://www.inrae.fr/).
 - L’expérimentation de la **cartographie nationale des inondations** (DGPR).
+- ...
 
 **Dépôt légal** :
 Cartino2D a été déposé à l’[Agence de Protection des Programmes (APP)](https://secure2.iddn.org/app.server/certificate/?sn=2023240031000&key=f1b340d417b4cbd12af52d26f7bdacee869d9477484e00c394e699e761733d67&lang=fr) en 2024, avec un renouvellement en 2025.
 
 **Collaborations** :
-Ce projet est le fruit d’échanges avec les partenaires cités en objet, en particulier **l’Université Gustave Eiffel et l’INRAE** depuis de nombreuses années comme la collaboration de l'[ANR PICS](https://anr.fr/Projet-ANR-17-CE03-0011) (ANR-17-CE03-0011)
+Ce projet est le fruit d’échanges techniques avec les partenaires cités précédement en particulier l’**Université Gustave Eiffel** et l'**INRAE**
 
 ---
 ### Configuration requise
