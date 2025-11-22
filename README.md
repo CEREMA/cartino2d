@@ -12,7 +12,7 @@ Première version référencée sur GitHub.
 
 ---
 ## Objet de Cartino2D
-**Cartino2D (C2D)**, développé par le [Cerema](https://www.cerema.fr/fr), est un cadre automatisé pour déployer des modèles hydrauliques 2D résolvant les équations de Saint-Venant (via (**Telemac-2D**)[https://www.opentelemac.org/]), intégrant pluie, infiltration et débits. 
+**Cartino2D (C2D)**, développé par le [Cerema](https://www.cerema.fr/fr), est un cadre automatisé pour déployer des modèles hydrauliques 2D résolvant les équations de Saint-Venant (via [**Telemac-2D**](https://www.opentelemac.org/)), intégrant pluie, infiltration et débits. 
 Il permet de :
 - Générer automatiquement des maillages adaptés au relief (structurés ou non).
 - Gérer des ouvrages hydrauliques et des sections de contrôle.
@@ -30,7 +30,7 @@ Cartino2D (« CARTographie des INOndations 2D ») est une suite de routines R po
 
 **Développé dans le cadre de** :
 - Des conventions de R&D pour le [**PAPI des Petits Côtiers Toulonnais**](https://metropoletpm.fr/nos-missions/cadre-de-vie-environnement/prevenir-des-inondations-et-papi-pct)
-- Des travaux d'aléas sur les communes de Montepellier et Castelnau-le-Lez pour la [**DDTM34**](https://www.herault.gouv.fr/Actions-de-l-Etat/Environnement-eau-chasse-risques-naturels-et-technologiques/Risques-naturels-et-technologiques/Transmission-des-informations-aux-maires-TIM/Les-Porter-a-connaissance-PAC-de-l-Herault/MONTPELLIER)
+- Des travaux d'aléas sur les communes de Montpellier et Castelnau-le-Lez pour la [**DDTM34**](https://www.herault.gouv.fr/Actions-de-l-Etat/Environnement-eau-chasse-risques-naturels-et-technologiques/Risques-naturels-et-technologiques/Transmission-des-informations-aux-maires-TIM/Les-Porter-a-connaissance-PAC-de-l-Herault/MONTPELLIER)
 - L'[**ANR PICS**](https://anr.fr/Projet-ANR-17-CE03-0011) (ANR-17-CE03-0011) piloté par [**l’Université Gustave Eiffel**](https://www.univ-gustave-eiffel.fr/)
 - Des conventions de R&D pour le [**PAPI 3 Vistre**](https://papi3.vistre-vistrenque.fr/synthese-programme) (secteur de Nîmes).
 - Des conventions de R&D sur le ruissellement pour la [**Métropole Aix-Marseille-Provence**](https://deliberations.ampmetropole.fr/documents/metropole/deliberations/2023/03/16/ANNEXE/49593_49593_cerema_annexe.pdf).
@@ -42,7 +42,9 @@ Cartino2D (« CARTographie des INOndations 2D ») est une suite de routines R po
 Cartino2D a été déposé à l’[Agence de Protection des Programmes (APP)](https://secure2.iddn.org/app.server/certificate/?sn=2023240031000&key=f1b340d417b4cbd12af52d26f7bdacee869d9477484e00c394e699e761733d67&lang=fr) en 2024, avec un renouvellement en 2025.
 
 **Collaborations** :
-Ce projet est le fruit d’échanges techniques avec les partenaires cités précédement en particulier l’**Université Gustave Eiffel** et l'**INRAE**
+Ce projet est le fruit d’échanges techniques avec les partenaires cités précédement en particulier:
+- l’**Université Gustave Eiffel** et l'**INRAE**
+- les collectivités pour leurs analyses critiques de l'application de Cartino2D sur leur territoire. 
 
 ---
 ### Configuration requise
@@ -86,7 +88,7 @@ Une expérience autonome avec **Telemac-2D** est nécessaire.
    - Nettoyage et fusion des petits bassins orphelins.
 
 7. **Pré-traitements topographiques**
-   - Outils **FILINO** pour filtrer/traiter les MNT LiDAR.
+   - Outils **FILINO** pour filtrer/traiter les MNT LiDAR et en particulier [LidarHD IGN](https://geoservices.ign.fr/lidarhd).
    - Plugin QGIS **OHFLASH** pour vérifier les données SIG et identifier les ouvrages/dépressions.
 
 8. **Sorties, analyses et contrôles**
@@ -96,7 +98,7 @@ Une expérience autonome avec **Telemac-2D** est nécessaire.
 
 9. **Échelle d’application et performances**
    - Multi-échelle : du national (France, 25 m) au métrique fin (maillage non structuré 3–25 m en zones urbaines).
-   - Calcul distribué : traitements parallèles, tests sur HPC (CEREMA, [GENCI](https://www.genci.fr) - AD012A14287, AD012A14287R1 et AD012A14287R2).
+   - Calcul distribué : traitements parallèles, tests sur HPC (Cerema, [Ifremer](https://www.ifremer.fr/fr), [GENCI](https://www.genci.fr) - AD012A14287, AD012A14287R1 et AD012A14287R2).
 
 10. **Limites et précautions**
     - Hypothèses non modélisées : barrages activement opérés, brèches de digues, submersions marines dynamiques, transport solide/débris, pompages et transvasements...
