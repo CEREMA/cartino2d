@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -q mpi_3
+#PBS -l walltime=10:30:00
+#PBS -l mem=5gb
+#PBS -l ncpus=84
+
+
+# Mandatory command to activate the TELEMAC environment
+export ROOT="/appli/telemac-mascaret/v8p2r1"
+. ${ROOT}/configs/datarmor-intel-impi-mkl.sh
+
+# cd to the directory you submitted your job
+cd $PBS_O_WORKDIR
+
+#copy the directory of your example in your directory
+cd ${SCRATCH}/eftp
+#\rm -rf telemac-mascaret
+#mkdir telemac-mascaret
+#cd telemac-mascaret
+#cp -prf ${ROOT}/examples/telemac2d/gouttedo .
+cd ${SCRATCH}/eftp/nom_contour
+
+
+#hosts list
+export HOSTSLIST=`cat $PBS_NODEFILE | uniq | paste -d "\n" - -`
+echo $HOSTSLIST
+
+
+
