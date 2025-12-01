@@ -4,7 +4,7 @@
 ---
 ## Version
 Première version référencée sur GitHub.
-Cartino2D est protégé à l'[Agence pour la Protection des Programmes (APP)](https://www.app.asso.fr/).
+
 ---
 ## Contenu du dépôt
 - **Code source principal** : Script R nommé `C2D_Run.R`.
@@ -39,7 +39,7 @@ Cartino2D (« CARTographie des INOndations 2D ») est une suite de routines R po
 - ...
 
 **Dépôt légal** :
-Cartino2D a été déposé à l’[Agence de Protection des Programmes (APP)](https://secure2.iddn.org/app.server/certificate/?sn=2023240031000&key=f1b340d417b4cbd12af52d26f7bdacee869d9477484e00c394e699e761733d67&lang=fr) en 2024, avec un renouvellement en 2025.
+Cartino2D a été déposé à l’[Agence de Protection des Programmes (APP)](https://secure2.iddn.org/app.server/certificate/?sn=2023240031000&key=f1b340d417b4cbd12af52d26f7bdacee869d9477484e00c394e699e761733d67&lang=fr) en 2024, avec un renouvellement en [2025](https://secure2.iddn.org/app.server/certificate/?sn=2024210024001&key=2d788c83810665859381fcd0815a6673fa5d88de88a3a0c00cf0fc17909cb3a1&lang=fr).
 
 **Collaborations** :
 Ce projet est le fruit d’échanges techniques avec les partenaires cités précédement en particulier:
