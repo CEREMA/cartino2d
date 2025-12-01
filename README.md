@@ -4,7 +4,7 @@
 ---
 ## Version
 Première version référencée sur GitHub.
-Cartino2D est protégé à l'{Agence pour la Protection des Programmes (APP)}(https://www.app.asso.fr/).
+Cartino2D est protégé à l'[Agence pour la Protection des Programmes (APP)](https://www.app.asso.fr/).
 ---
 ## Contenu du dépôt
 - **Code source principal** : Script R nommé `C2D_Run.R`.
