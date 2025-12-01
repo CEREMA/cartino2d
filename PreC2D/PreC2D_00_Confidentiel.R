@@ -1,0 +1,5 @@
+host_db="172.23.210.16"
+dbname_db="sig"
+port_db="5432"
+user_db="svgc"
+password_db="svgc"
