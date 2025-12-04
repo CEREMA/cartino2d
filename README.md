@@ -105,6 +105,8 @@ Une expérience autonome avec **Telemac-2D** est nécessaire.
     - Résolution et vectorisation : remises à l’échelle (25 m) peuvent atténuer les petits aménagements (digues fines, ponts). La vaeur de la résolution est un indice des obejts pouvant être pris en compte dans les simulations hydrauliques.
     - Qualité des bases : précision dépendante des DTM LiDAR et des bases d’ouvrages/usage du sol ; corrections manuelles fréquentes en zones urbaines complexes.
 
+11. **Jeu de données**
+    - Un jeu de données est disponible au lien suivant [DOI 10.5281/zenodo.17778608.](https://doi.org/10.5281/zenodo.17778608).
 ---
 ## Développement et support
 - **Évolution continue** : Le dépôt sera amené à évoluer.
