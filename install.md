@@ -20,9 +20,15 @@ Avant de commencer, assurez-vous :
 
 ---
 
-### 3. Création du répertoire Cartino2D
-- Créez un dossier nommé **Cartino2D** à la racine du disque `C:`.
-  **Chemin recommandé** : `C:\Cartino2D`
+### 3. Installation de R et RStudio
+- Téléchargez et installez **R** (dernière version) depuis : [https://cran.r-project.org/bin/windows/base/](https://cran.r-project.org/bin/windows/base/)
+  **Chemin d’installation** : `C:\R\R-x.x.x`
+- Téléchargez et installez **RStudio** depuis : [https://posit.co/download/rstudio-desktop/](https://posit.co/download/rstudio-desktop/)
+  **Chemin d’installation** : `C:\RStudio`
+- Installez **Rtools** depuis : [https://cran.r-project.org/bin/windows/Rtools/](https://cran.r-project.org/bin/windows/Rtools/). Attention, à chaque mise à jour de **R**, vous devrez mettre à jour **Rtools**
+- Copiez le dossier **Cerema** (contenant les codes R) dans `C:\R\R-x.x.x`, puis :
+  - Extrayez son contenu.
+  - Renommez le dossier extrait en **Cerema**.
 
 ---
 
@@ -30,27 +36,23 @@ Avant de commencer, assurez-vous :
 - Téléchargez **GMSH** (dernière version pour Windows 64-bit) depuis : [https://gmsh.info/bin/Windows/](https://gmsh.info/bin/Windows/)
 - Décompressez l’archive et copiez son contenu dans :
   **Chemin de destination** : `C:\Cartino2D`
-
+  
 ---
 
-### 5. Installation de R et RStudio
-- Téléchargez et installez **R** (dernière version) depuis : [https://cran.r-project.org/bin/windows/base/](https://cran.r-project.org/bin/windows/base/)
-  **Chemin d’installation** : `C:\R\R-x.x.x`
-- Téléchargez et installez **RStudio** depuis : [https://posit.co/download/rstudio-desktop/](https://posit.co/download/rstudio-desktop/)
-  **Chemin d’installation** : `C:\RStudio`
-- Installez **Rtools** depuis : [https://cran.r-project.org/bin/windows/Rtools/](https://cran.r-project.org/bin/windows/Rtools/)
-- Copiez le dossier **Cerema** (contenant les codes R) dans `C:\R\R-x.x.x`, puis :
-  - Extrayez son contenu.
-  - Renommez le dossier extrait en **Cerema**.
-
----
-
-### 6. Installation de TauDEM
+### 5. Installation de TauDEM
 - Téléchargez **TauDEM** (version complète) depuis : [https://hydrology.usu.edu/taudem/taudem5/downloads.html](https://hydrology.usu.edu/taudem/taudem5/downloads.html)
 - Installez-le dans le répertoire suivant :
   **Chemin d’installation** : `C:\TauDEM`
 - Lors de l’installation, choisissez l’option :
   **Type de configuration** : *Typical*
+
+---
+
+### 6. Téléchargement de pscp.exe
+- Téléchargez **pscp.exe** depuis : [https://the.earth.li/~sgtatham/putty/latest/w64/pscp.exe](https://the.earth.li/~sgtatham/putty/latest/w64/pscp.exe)
+- Copiez le fichier dans :
+  **Chemin de destination** : `C:\Cartino2D`
+  *(Ne lancez pas l’exécutable.)*
 
 ---
 
@@ -83,19 +85,11 @@ Avant de commencer, assurez-vous :
 - Copiez-le dans :
   **Chemin de destination** : `C:\Cartino2D`
 - **Modifications spécifiques à Cartino2D** :
-  Glissez les dossiers et fichiers de `pputils_cerema` dans le dossier `pputils`, en conservant les bonnes positions.
+  Glissez les dossiers et fichiers de [`pputils_cerema`](https://github.com/CEREMA/cartino2d/releases) dans le dossier `pputils`, en conservant les bonnes positions.
 
 ---
 
-### 9. Téléchargement de pscp.exe
-- Téléchargez **pscp.exe** depuis : [https://the.earth.li/~sgtatham/putty/latest/w64/pscp.exe](https://the.earth.li/~sgtatham/putty/latest/w64/pscp.exe)
-- Copiez le fichier dans :
-  **Chemin de destination** : `C:\Cartino2D`
-  *(Ne lancez pas l’exécutable.)*
-
----
-
-### 10. Installation de Telemac v8p4r0
+### 9. Installation de Telemac v8p4r0
 - Téléchargez **Telemac v8p4r0** depuis : [http://www.opentelemac.org/](http://www.opentelemac.org/)
 - Installez-le, par exemple, dans le répertoire : `C:\TELEMAC\V8P4`
 - Mettez à jour **MPI** en téléchargeant et en exécutant `msmpisetup.exe` depuis : [https://www.microsoft.com/en-us/download/details.aspx?id=105289](https://www.microsoft.com/en-us/download/details.aspx?id=105289)
@@ -105,9 +99,15 @@ Avant de commencer, assurez-vous :
 
 ---
 
-### 11. Vérification finale
+### 10. Vérification finale
 - **Redémarrez votre machine** pour appliquer toutes les modifications.
 - Vérifiez que tous les logiciels sont accessibles depuis leurs chemins respectifs.
+
+---
+
+### 11. Création du répertoire Cartino2D
+- Créez un dossier vide nommé **Cartino2D** à la racine du disque `C:` où seront effectués vos traitements.
+  **Chemin recommandé** : `C:\Cartino2D`
 
 ---
 
@@ -117,7 +117,11 @@ Avant de commencer, assurez-vous :
 - Dans l’interface, installez les librairies demandées.
 - Cliquez sur **Source** pour commencer à utiliser Cartino2D de manière autonome.
 - Des exemples sont fournis en cliquant sur l'étape 0 de C2D.
-- Les fichiers utilisateurs sont à modifier manuellement dans le dossier C2D_ParamUser
+- Les fichiers utilisateurs sont à modifier manuellement dans le dossier
+	- `C2D_ParamUserC2D_CodeCalcuDistant.R`
+	- `C2D_LienOutilsPC.R`
+	- `C2D_00_Secteur_xxx.R` - seul le xxx peut être modifié, plusieurs fichiers peuvent co-exister
+	- `C2D_ParamUtilisateur_xxx.R` - seul le xxx peut être modifié, plusieurs fichiers peuvent co-exister
 
 ---
 
