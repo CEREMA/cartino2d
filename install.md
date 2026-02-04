@@ -17,6 +17,7 @@ Avant de commencer, assurez-vous :
 - Téléchargez et installez **QGIS** depuis : [https://qgis.org/](https://qgis.org/)
   **Chemin d’installation recommandé** : `C:\QGIS`
 - **Attention** : Si le fichier `grassxxx.bat` appelé dans Cartino2D ne fonctionne pas correctement, installez **GRASS GIS** depuis : [https://grass.osgeo.org/](https://grass.osgeo.org/).
+- Il peut être utile d'installer [ffmpeg](https://www.ffmpeg.org/) par l'intermédiaire du plugin [crayfish](https://plugins.qgis.org/plugins/crayfish/) (production de vidéo)
 
 ---
 
@@ -26,9 +27,12 @@ Avant de commencer, assurez-vous :
 - Téléchargez et installez **RStudio** depuis : [https://posit.co/download/rstudio-desktop/](https://posit.co/download/rstudio-desktop/)
   **Chemin d’installation** : `C:\RStudio`
 - Installez **Rtools** depuis : [https://cran.r-project.org/bin/windows/Rtools/](https://cran.r-project.org/bin/windows/Rtools/). Attention, à chaque mise à jour de **R**, vous devrez mettre à jour **Rtools**
-- Copiez le dossier **Cerema** (contenant les codes R) dans `C:\R\R-x.x.x`, puis :
+- Copiez les sources ce dépôt github dans un dossier **Cerema** (contenant les codes R) dans `C:\R\R-x.x.x`, puis :
   - Extrayez son contenu.
   - Renommez le dossier extrait en **Cerema**.
+ Quelques astuces R-Studio
+	- si vous voulez arrêter votre calcul 'Ctrl-C'
+	- si vous voulez savoir où une variable est utilisée dans des fichiers 'Crtl-Shift-F' permet une recherche
 
 ---
 
