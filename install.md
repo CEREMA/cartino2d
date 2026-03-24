@@ -1,5 +1,5 @@
 # Notice d’Installation de Cartino2D
-*(Version optimisée Mistral.ai – Novembre 2025)*
+*24 Mars 2026*
 **Compatibilité** : Windows uniquement
 **Langue** : Français
 
@@ -49,6 +49,7 @@ Avant de commencer, assurez-vous :
   **Chemin d’installation** : `C:\TauDEM`
 - Lors de l’installation, choisissez l’option :
   **Type de configuration** : *Typical*
+- l’**antivirus bloque l’exécutable TauDEM** de manière fréquente sous Windows. Sur les essais Cerema, TauDEM537_setup.exe fonctionne, TauDEM540_setup_x64.exe est bloqué
 
 ---
 
