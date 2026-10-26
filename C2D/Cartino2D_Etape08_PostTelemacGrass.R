@@ -27,8 +27,8 @@ Etape10_PostTelemacGrass=function()
         # system(paste0(BatGRASS," -c ",SecteurGRASS," --text"))
         
         # Creation propre d'un monde GRASS à 3 niveaux : GISDBASE / LOCATION / MAPSET
-        loc_name = paste0("Post_", nomres, "_", basename(dsnlayerC), "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-        SecteurGRASS = file.path(paste0(dirname(SecteurGRASS_),format(Sys.time(),format="%Y%m%d_%H%M%S")), loc_name, "PERMANENT")
+        loc_name = paste0("Post_", basename(dsnlayerC), "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+        SecteurGRASS = file.path(SecteurGRASS_, loc_name, "PERMANENT")
         loc_path = dirname(SecteurGRASS)
         
         # Nettoyage préalable puis création avec projection EPSG (-e pour sortie propre)
@@ -251,7 +251,7 @@ Etape10_PostTelemacGrass=function()
                 # On utilise un if() imbriqué pour eviter que GRASS ne retourne NULL sur toute la carte
                 nomASCg_clean = paste0(nomASCg, "_clean")
                 cmd = paste0("r.mapcalc --quiet --overwrite ", shQuote(paste0(
-                  nomASCg_clean, " = if(isnull(OH_Z_seuil), ", nomASCg, ", if(", nomASCg, " < OH_Z_seuil, MNT_BRUT_NAT, ", nomASCg, "))"
+                  nomASCg_clean, " = if(isnull(OH_Z_seuil), ", nomASCg, ", MNT_BRUT_NAT)"
                 )))
                 system(paste0(BatGRASS, " ", SecteurGRASS, " --exec ", cmd))
                 
