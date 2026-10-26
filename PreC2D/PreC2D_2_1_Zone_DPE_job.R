@@ -1,12 +1,10 @@
-PreC2D_1_1_Zone_DPE_job=function(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resolution)
+PreC2D_1_1_Zone_DPE_job=function(SecteurGRASS_,qgis_process,icontour,iraci,raci,Extens,dsnDPE,resolution)
 {
   
-  SecteurGRASS=SecteurGRASS=paste0(dirname(SecteurGRASS_),format(Sys.time(),format="%Y%m%d_%H%M%S"),"_",iraci,"/",basename(SecteurGRASS_))
+  SecteurGRASS=SecteurGRASS=paste0(dirname(SecteurGRASS_),format(Sys.time(),format="%Y%m%d_%H%M%S"),"_",icontour,"_",iraci,"/",basename(SecteurGRASS_))
   unlink(dirname(SecteurGRASS),recursive=TRUE)
   system(paste0(BatGRASS," -c EPSG:",EPSG," ",dirname(SecteurGRASS)," --text"))
   system(paste0(BatGRASS," -c ",SecteurGRASS," --text"))
-  
-  
   
   # Ouverture de HWH, HSF et HWT
   for (i in 1:3)
@@ -57,7 +55,7 @@ PreC2D_1_1_Zone_DPE_job=function(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resoluti
   cmd=paste0("r.mapcalc --overwrite ",shQuote(exp))
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
-  nomInond="ZI"
+  nomInond=paste0("ZI_",Extens[1,1],"_",gsub("\\.","_",Extens[3,1]),"_",Extens[1,2],"_",gsub("\\.","_",Extens[3,2]))
   cmd=paste0("r.series --overwrite input=",nomInond1,",",nomInond2," output=",nomInond," method=maximum")
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
@@ -65,7 +63,8 @@ PreC2D_1_1_Zone_DPE_job=function(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resoluti
   BufPlus=1*resolution
   BufMoins=1*resolution
   
-  BufPlusMoins(nomInond,seuilSup0,BufPlus,BufMoins,"-s",dsnDPE,-99,1,SecteurGRASS)
+  BufPlusMoins(nomInond,seuilSup0,BufPlus,BufMoins,"-s",dsnDPE,-99,1,SecteurGRASS,qgis_process)
+
   nomvectsortie=file.path(dsnDPE,paste0(raci,"_",nomInond,".gpkg"))
 
 
@@ -73,7 +72,8 @@ PreC2D_1_1_Zone_DPE_job=function(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resoluti
   source(file.path(chem_routine,"PreC2D","PreC2D_6_2_Decrenelage_job.R"))
   AireMin_Inter=630
   AireMin_Exter=25*25*2.01
-  Decrenelage(nomvectsortie,AireMin_Inter,AireMin_Exter,EPSG,resolution)
+
+  Decrenelage(nomvectsortie,AireMin_Inter,AireMin_Exter,EPSG,resolution,qgis_process)
   
   if (file.exists(file.path(dsnDPE,paste0(raci,Extens[1,3],Extens[2,3],".gpkg")))==T)
   {
@@ -85,7 +85,7 @@ PreC2D_1_1_Zone_DPE_job=function(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resoluti
     
     BufPlus=1*resolution
     BufMoins=1*resolution
-    BufPlusMoins(nomInond_Flash,5.1*resolution^2,BufPlus,BufMoins,"",dsnDPE,-99,1,SecteurGRASS)
+    BufPlusMoins(nomInond_Flash,5.1*resolution^2,BufPlus,BufMoins,"",dsnDPE,-99,1,SecteurGRASS,qgis_process)
 
     #--------------------- ZI Crue
     nomInond_Crue0="ZI_Crue"
@@ -94,7 +94,7 @@ PreC2D_1_1_Zone_DPE_job=function(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resoluti
     
     BufPlus=2*resolution
     BufMoins=2*resolution
-    BufPlusMoins(nomInond_Crue0,seuilSup0,BufPlus,BufMoins,"-s",dsnDPE,-99,1,SecteurGRASS)
+    BufPlusMoins(nomInond_Crue0,seuilSup0,BufPlus,BufMoins,"-s",dsnDPE,-99,1,SecteurGRASS,qgis_process)
     
     ZoneCrue <- st_read(file.path(dsnDPE,paste0(raci,"_",nomInond_Crue0,".gpkg")))
     if (nrow(ZoneCrue)>0)
@@ -181,7 +181,7 @@ PreC2D_1_1_Zone_DPE_job=function(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resoluti
     
     BufPlus=3*resolution
     BufMoins=2*resolution
-    BufPlusMoins(nomInond_Endo,0,BufPlus,BufMoins,"",dsnDPE,-99,1,SecteurGRASS)
+    BufPlusMoins(nomInond_Endo,0,BufPlus,BufMoins,"",dsnDPE,-99,1,SecteurGRASS,qgis_process)
     
     Endo=st_read(file.path(dsnDPE,paste0(raci,"_",nomInond_Endo,".gpkg")))
     if (nrow(Endo)>0)

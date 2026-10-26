@@ -9,7 +9,7 @@
 DataObs_choix=function()
 {
   library(readxl)
-  chem_routine=R.home(component = "Cerema")
+  # chem_routine=R.home(component = "Cerema")
   paste0(chem_routine,"/PreC2D")
   Link_Data = "Data_obs.xlsx"
   Link_DataXLS = read_excel(file.path(chem_routine,"PreC2D",Link_Data))
@@ -147,10 +147,10 @@ Gestion_Sections_Controle = function(dsnlayer, dsnlayerC, contour, ExportTopo)
           
           xyz = read.table(nomoutput)
           ligne = st_coordinates(SectControl[is, ])
-          browser()
+          # browser()
           UV = ligne[2, ] - ligne[1, ]
           UV = UV / sum(UV ^ 2) ^ 0.5
-          browser()
+          # browser()
           nom = SectControl[is, ]$ID
           nom2 = strsplit(nom, "_")
           lg = nchar(nom2[[1]][length(nom2[[1]])])
@@ -365,1942 +365,4603 @@ copie_prerequis = function()
 ########################plot section de controle 
 
 #
-plot_sc_obs_oh <- function()
-{
+plot_sc_obs_ohh <- function() {
+  library(tidyverse)
+  library(sf)
+  library(plotly)
+  library(htmlwidgets)
+  library(tools)
   
-  SC_list <- list.files(dsnlayerC,pattern = "SC.txt")
-  ################################graphiques html des sections de contrôle###############################
-  if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp")) & !is_empty(SC_list))
-  {
-    if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-      
-      sc_sf <- st_read(file.path(dsnlayerC,"SectControl_Select.shp"))
-      if("Q" %in% names(sc_sf)){
-        sc_sf <- sc_sf[,-which(names(sc_sf)=="Q")]
-        st_write(sc_sf,file.path(dsnlayerC,"SectControl_Select.shp"),delete_dsn = TRUE)
-        sc_sf <- st_read(file.path(dsnlayerC,"SectControl_Select.shp"))
-        
-      }
-      
-      cl_names <- c("nom","numsec","Time","Q","Zmoy","Zmax","Zmin","Hmax","Htot")
-      # ListeObs <- DataObs_choix()
-      funx <- function(x){
-        as.numeric(x)
-      }
-      
-      
+  # --- 1. FONCTIONS UTILITAIRES ---
+  
+  get_rain_step <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    step_part <- grep("^\\d+min$", parts, value = TRUE)
+    if (length(step_part) > 0) {
+      val <- as.numeric(gsub("min", "", step_part[1]))
+      return(if(is.na(val) || val == 0) 1 else val)
     }
-    ############## resultat nabil
+    return(1) 
+  }
+  
+  parse_time_meta <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    is_evt <- grepl("Evt", filename, fixed = TRUE)
+    if (is_evt) {
+      date_deb <- strptime(gsub("[^0-9]", "", parts[4]), format = "%Y%m%d%H%M", tz = "UTC")
+      h_m <- strsplit(parts[5], "h")[[1]]
+      duree <- (as.numeric(h_m[1]) + as.numeric(substr(h_m[2], 1, 2)) / 60) * 3600
+    } else {
+      date_deb <- strptime("190001010000", format = "%Y%m%d%H%M", tz = "UTC")
+      duree <- (as.numeric(parts[7]) + as.numeric(parts[8]) / 60) * 3600
+    }
+    list(date_deb = as.POSIXct(date_deb), duree = duree, is_evt = is_evt)
+  }
+  
+  parse_telemac_sortie <- function(file_path) {
+    message(paste("    [DEBUG]", Sys.time(), "- Début lecture fichier sortie:", basename(file_path)))
+    if (!file.exists(file_path)) return(NULL)
     
-    dsnscobs <- file.path(dsnlayer,"_SectionsControles",contour$NOMPOST)
-    for (i_filesc in 1:length(SC_list)) {
-      
-      
-      # name_case <- paste0("brute_",strsplit(SC_list[i_filesc],"SC")[[1]][1])
-      name_case_split <- strsplit(paste0("brute_",SC_list[i_filesc]),"_")[[1]]
-      name_case <- do.call(paste, c(as.list(name_case_split[1:6]), sep = "_"))
-      chem_pluie <- file.path(dsnPluie,contour$NOMPOST)
-      file_brute <- list.files(chem_pluie,pattern = name_case,full.names = T)
-      file_brute <- file_brute[1]
-      
-      if(!is.na(file_brute)){
-        tab_brute <- read.table(file_brute,header = TRUE)
-        
+    lines <- readLines(file_path, warn = FALSE)
+    
+    # Correction critique : Ancrage ^ pour ne pas capturer "VARIABLE TIME STEP" par erreur
+    ts_idx <- grep("^\\s*TIME STEP", lines, useBytes = TRUE, ignore.case = TRUE)[1]
+    if (is.na(ts_idx)) {
+      message("    [WARN] TIME STEP introuvable, valeur par défaut 1.0 utilisée.")
+      past_ts <- 1.0
+    } else {
+      extracted_ts <- gsub(".*TIME STEP\\s*[:=]?\\s*([0-9.]+).*", "\\1", lines[ts_idx], ignore.case = TRUE)
+      past_ts <- as.numeric(extracted_ts)
+      if(is.na(past_ts)) past_ts <- 1.0
+    }
+    
+    idx_interest <- grep("ITERATION|FLUX BOUNDARY|CULVERT|RUNOFF_SCS_CN|VOLUME IN THE DOMAIN|ADDITIONAL VOLUME", lines, useBytes = TRUE)
+    if (length(idx_interest) == 0) return(NULL)
+    ls <- lines[idx_interest]
+    
+    clean_numeric <- function(txt) {
+      txt <- gsub("[*]", "", txt)
+      as.numeric(txt)
+    }
+    
+    mots_cles <- tribble(
+      ~key, ~start, ~end,
+      "ITERATION ", 12, 22,
+      "RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61,
+      "VOLUME IN THE DOMAIN", 28, 44,
+      "ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61
+    )
+    
+    flux_keys <- unique(gsub(":.*", "", grep("FLUX BOUNDARY", ls, value = TRUE, useBytes = TRUE)))
+    culvert_keys <- unique(gsub(":.*", "", grep("CULVERT", ls, value = TRUE, useBytes = TRUE)))
+    
+    extra <- tibble(key = c(flux_keys, culvert_keys)) %>%
+      mutate(start = if_else(grepl("CULVERT", key), 37, 25), end = if_else(grepl("CULVERT", key), 62, 42))
+    
+    all_keys <- bind_rows(mots_cles, extra)
+    
+    ref_idx <- grep("ITERATION ", ls, useBytes = TRUE)
+    res <- matrix(NA, nrow = length(ref_idx), ncol = nrow(all_keys))
+    
+    message(paste("    [DEBUG]", Sys.time(), "- Extraction des valeurs..."))
+    
+    for (i in 1:nrow(mots_cles)) {
+      m <- grep(mots_cles$key[i], ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m) > 0) {
+        vals <- clean_numeric(substr(ls[m], mots_cles$start[i], mots_cles$end[i]))
+        indices <- findInterval(m, ref_idx)
+        valid <- indices > 0 & indices <= nrow(res)
+        col_idx <- match(mots_cles$key[i], all_keys$key)
+        res[indices[valid], col_idx] <- vals[valid]
+      }
+    }
+    
+    if (length(flux_keys) > 0) {
+      m_flux <- grep("FLUX BOUNDARY", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_flux) > 0) {
+        txt_flux <- ls[m_flux]
+        vals_flux <- clean_numeric(substr(txt_flux, 25, 42))
+        keys_flux <- gsub(":.*", "", txt_flux)
+        rows <- findInterval(m_flux, ref_idx)
+        cols <- match(keys_flux, all_keys$key)
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_flux[valid]
+      }
+    }
+    
+    if (length(culvert_keys) > 0) {
+      m_cul <- grep("CULVERT", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_cul) > 0) {
+        txt_cul <- ls[m_cul]
+        vals_cul <- clean_numeric(substr(txt_cul, 37, 62))
+        keys_cul <- gsub(":.*", "", txt_cul)
+        rows <- findInterval(m_cul, ref_idx)
+        cols <- match(keys_cul, all_keys$key)
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_cul[valid]
+      }
+    }
+    
+    df <- as.data.frame(res)
+    colnames(df) <- all_keys$key
+    df$Past_Ts <- past_ts
+    
+    # Nettoyage des lignes où l'itération n'a pas été trouvée (ex: header)
+    df <- df[!is.na(df[, 1]), ]
+    
+    message(paste("    [DEBUG]", Sys.time(), "- Parsing terminé. Lignes de données valides:", nrow(df)))
+    gc() 
+    return(df)
+  }
+  
+  # --- 2. INITIALISATION ---
+  message(paste("[INFO]", Sys.time(), "Démarrage plot_sc_obs_oh"))
+  
+  sc_list <- list.files(dsnlayerC, pattern = "SC.txt")
+  list_sortie <- list.files(dsnlayerC, pattern = "s.sortie")
+  list_sortie <- list_sortie[!grepl("\\.txt$", list_sortie)]
+  
+  if (length(sc_list) == 0) return(message("Aucun fichier SC.txt trouvé."))
+  
+  path_shp <- file.path(dsnlayerC, "SectControl_Select.shp")
+  sc_sf <- st_read(path_shp, quiet = TRUE) %>% mutate(ID = as.character(ID))
+  contour_aire <- st_read(file.path(dsnlayerC, "Step_Cartino2d_1_Contour.shp"), quiet = TRUE)
+  aire_val <- as.numeric(st_area(contour_aire))
+  
+  dsnscobs <- file.path(dsnlayer, "_SectionsControles", contour$NOMPOST)
+  
+  cache_sortie <- list()      
+  cache_rain_plots <- list()  
+  
+  # --- 3. BOUCLE PRINCIPALE ---
+  
+  for (f_sc in sc_list) {
+    message(paste("----------------------------------------------------------------"))
+    message(paste("[STEP]", Sys.time(), "Traitement fichier SC :", f_sc))
+    
+    racine <- sub("SC.txt$", "", f_sc)
+    
+    p_q_out <- file.path(dsnlayerC, paste0(racine, "_PN_PB_Q_Obs.html"))
+    p_z_out <- file.path(dsnlayerC, paste0(racine, "_PN_PB_Z_Obs.html"))
+    
+    if (file.exists(p_q_out) && file.exists(p_z_out)) {
+      message(paste("  -> [SKIP] Fichiers HTML déjà présents."))
+      next
+    }
+    
+    meta <- parse_time_meta(f_sc)
+    f_out_match <- list_sortie[grep(racine, list_sortie)]
+    
+    if (length(f_out_match) == 0) {
+      message(paste("  -> [WARN] Aucun fichier .sortie trouvé."))
+      tab_out <- NULL
+    } else {
+      if (length(f_out_match) > 1) {
+        dates_out <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", f_out_match)
+        f_out_match <- f_out_match[which.max(as.POSIXct(dates_out, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
       }
       
+      if (is.null(cache_sortie[[f_out_match]])) {
+        cache_sortie[[f_out_match]] <- parse_telemac_sortie(file.path(dsnlayerC, f_out_match))
+      }
+      tab_out <- cache_sortie[[f_out_match]]
+    }
+    
+    if (!is.null(tab_out)) {
+      parts_sc <- strsplit(basename(f_sc), "_")[[1]]
+      pattern_brute <- paste0("brute_", paste(parts_sc[1:6], collapse="_"))
+      dir_pluie <- tryCatch(file.path(dsnPluie, contour$NOMPOST), error = function(e) NULL)
+      file_brute <- if (!is.null(dir_pluie) && dir.exists(dir_pluie)) {
+        list.files(dir_pluie, pattern = pattern_brute, full.names = TRUE)[1]
+      } else NULL
       
-      if(grepl("Evt", SC_list[i_filesc], fixed = TRUE)){
+      cache_key_rain <- paste0(f_out_match, ifelse(!is.na(file_brute), basename(file_brute), "NONE"))
+      
+      if (is.null(cache_rain_plots[[cache_key_rain]])) {
+        message(paste("  -> [PLOT] Préparation données pluie..."))
         
-        name_split <- strsplit(SC_list[i_filesc],"_")[[1]]
+        past_ts <- tab_out$Past_Ts[1]
+        if (is.na(past_ts)) past_ts <- 1
         
-        DUREE=(as.numeric(substr(name_split[5],1,2))+as.numeric(substr(name_split[5],4,5))/60)*3600
+        # Calcul du pas d'export robuste (médiane des différences)
+        if (nrow(tab_out) > 1) {
+          # On utilise la médiane pour éviter les artefacts de début/fin ou trous
+          pas_exp <- median(diff(tab_out[[1]]), na.rm = TRUE) * past_ts
+        } else {
+          pas_exp <- past_ts
+        }
+        if (is.na(pas_exp) || pas_exp <= 0) pas_exp <- 1 
         
-        datedebut <- gsub('[^0-9]','',name_split[4])
-        datedebut <- strptime(x = datedebut,format = "%Y%m%d%H%M" )
+        message(paste("    -> [INFO] Pas d'export calculé :", pas_exp, "s"))
         
+        t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
         
-        tab_sc_path <- file.path(dsnlayerC,SC_list[i_filesc])
-        tab_sc <- read.csv(file = tab_sc_path,
-                           header =FALSE,sep = "",skip = 2,col.names = cl_names 
+        df_pluie <- data.frame(
+          Time = t_axis,
+          Intensite = replace_na(tab_out[[2]], 0) * 1000 * 3600 / pas_exp, 
+          PNette = replace_na(tab_out[[4]], 0) / aire_val * 1000 * 3600 / past_ts,
+          CumulBrut = replace_na(tab_out[[2]], 0) * 1000, 
+          CumulNet = cumsum(replace_na(tab_out[[4]], 0) / aire_val * pas_exp / past_ts) * 1000,
+          NomBrut = "Pluie brute", NomNet = "Pluie nette"
         )
-        # GRAVE NABIL
-        # debut_time <- which(tab_sc$Time=="60.00" | tab_sc$Time==60)
-        pasexport=60
-        pasexportstr=sprintf("%.2f", pasexport)
-        debut_time <- which(tab_sc$Time==pasexportstr | tab_sc$Time==pasexport)
-        if(min(debut_time)>1){
-          tab_sc <- tab_sc[-(1:(debut_time-1)),]
+        
+        if (!is.na(file_brute) && file.exists(file_brute)) {
+          message(paste("    -> [BRUTE] Fichier pluie trouvé :", basename(file_brute)))
+          tab_brute <- read.table(file_brute, header = TRUE)
+          rain_step <- get_rain_step(basename(file_brute))
+          message(paste("    -> [BRUTE] Pas de temps détecté :", rain_step, "min"))
+          
+          col_val <- if("Val" %in% names(tab_brute)) "Val" else names(tab_brute)[2]
+          
+          t_brute <- meta$date_deb + (0:(nrow(tab_brute)-1)) * 60 
+          
+          vals_brute_interp <- approx(x = t_brute, y = tab_brute[[col_val]], xout = t_axis, rule = 2)$y
+          cumul_brute_native <- cumsum(tab_brute[[col_val]] / rain_step)
+          cumul_brute_interp <- approx(x = t_brute, y = cumul_brute_native, xout = t_axis, rule = 2)$y
+          
+          df_pluie$Intensite <- vals_brute_interp * 3600 / (pas_exp * rain_step)
+          df_pluie$CumulBrut <- cumul_brute_interp
         }
         
+        df_pluie <- df_pluie %>% filter(!is.na(Time))
         
-        tab_sc[,2:length(colnames(tab_sc))] <- data.frame(lapply(tab_sc,funx))[,2:length(colnames(tab_sc))]
-        tab_sc$DATE <- datedebut+as.numeric(tab_sc$Time)
-        # tab_sc <- inner_join(tab_sc,sc_sf,by = c("nom"="ID"))
+        if (nrow(df_pluie) > 2000) {
+          idx_keep <- unique(round(seq(1, nrow(df_pluie), length.out = 2000)))
+          df_pluie <- df_pluie[idx_keep, ]
+        }
         
+        if (nrow(df_pluie) > 0) {
+          # Hyétogramme (Carrés)
+          g1 <- ggplotly(ggplot(df_pluie) +
+                           geom_col(aes(x = Time, y = Intensite, fill = "Pluie brute"), position = "identity") +
+                           geom_col(aes(x = Time, y = PNette, fill = "Pluie nette"), position = "identity") +
+                           scale_fill_manual(values = c("Pluie brute" = "#33FFFF", "Pluie nette" = "#9933FF")) + 
+                           theme_bw() + ylab("Intensité [mm/h]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()))
+          
+          # Cumul (Lignes)
+          g3 <- ggplotly(ggplot(df_pluie) +
+                           geom_line(aes(x = Time, y = CumulBrut, color = "Cumul brut")) +
+                           geom_line(aes(x = Time, y = CumulNet, color = "Cumul net")) +
+                           scale_color_manual(values = c("Cumul brut" = "#33FFFF", "Cumul net" = "#9933FF")) + 
+                           theme_bw() + ylab("Cumul [mm]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()))
+          
+          cache_rain_plots[[cache_key_rain]] <- list(g1 = g1, g3 = g3, t_axis = t_axis)
+        } else {
+          cache_rain_plots[[cache_key_rain]] <- NULL
+        }
+      }
+      rain_objs <- cache_rain_plots[[cache_key_rain]]
+    } else {
+      rain_objs <- NULL
+    }
+    
+    if (is.null(rain_objs)) rain_objs <- list(g1 = plotly_empty(), g3 = plotly_empty(), t_axis = NULL)
+    
+    message(paste("  -> [DATA] Lecture données SC"))
+    cl_names <- c("nom", "numsec", "Time", "Q", "Zmoy", "Zmax", "Zmin", "Hmax", "Htot")
+    tab_sc <- read.csv(file.path(dsnlayerC, f_sc), header = FALSE, sep = "", skip = 2, col.names = cl_names)
+    
+    debut_time <- which(as.numeric(tab_sc$Time) >= 60)[1]
+    if (!is.na(debut_time) && debut_time > 1) tab_sc <- tab_sc[debut_time:nrow(tab_sc), ]
+    
+    tab_sc[, 2:9] <- lapply(tab_sc[, 2:9], as.numeric)
+    tab_sc$DATE <- meta$date_deb + tab_sc$Time
+    tab_sc$nom <- as.character(tab_sc$nom)
+    tab_sc <- inner_join(tab_sc, sc_sf, by = c("nom" = "ID"))
+    
+    message(paste("  -> [OBS] Chargement observations"))
+    sc_names <- unique(tab_sc$NOM)
+    sc_list_obs <- list.files(path = dsnscobs, full.names = TRUE)
+    
+    load_obs <- function(suffix, col_name) {
+      files_match <- unlist(lapply(sc_names, function(x) grep(paste0(x, suffix), sc_list_obs, value = TRUE)))
+      if (length(files_match) == 0) return(NULL)
+      df_list <- lapply(files_match, read.csv)
+      df_obs <- do.call(rbind, df_list)
+      df_obs$Date <- as.POSIXct(ifelse(grepl(" ", df_obs$Date), df_obs$Date, paste(df_obs$Date, "00:00:00")), tz = "UTC")
+      lim_inf <- min(tab_sc$DATE, na.rm = TRUE)
+      lim_sup <- max(tab_sc$DATE, na.rm = TRUE)
+      df_obs <- df_obs %>% filter(Date >= lim_inf & Date <= lim_sup)
+      if (nrow(df_obs) > 0) {
+        colnames(df_obs) <- c("Date", col_name, "NOM")
+        df_obs$NOM <- paste0(df_obs$NOM, "_obs")
+        return(df_obs)
+      }
+      return(NULL)
+    }
+    
+    obs_q <- load_obs("_Q.csv", "Q")
+    df_q_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, Q, NOM) %>% mutate(Q = abs(Q), TYPE = "solid"),
+                          if (!is.null(obs_q)) obs_q %>% mutate(Q = abs(Q), TYPE = "dashed") else NULL)
+    
+    obs_z <- load_obs("_Z.csv", "Z")
+    df_z_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, Z = Zmoy, NOM) %>% mutate(Z = ifelse(Z == 0, NA, Z), TYPE = "solid"),
+                          if (!is.null(obs_z)) obs_z %>% mutate(TYPE = "dashed") else NULL)
+    
+    obs_h <- load_obs("_H.csv", "H")
+    df_h_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, H = Hmax, NOM) %>% mutate(TYPE = "solid"),
+                          if (!is.null(obs_h)) obs_h %>% mutate(TYPE = "dashed") else NULL)
+    
+    save_master_plot <- function(df_data, y_col, y_lab, output_path, title_suffix) {
+      if (file.exists(output_path)) return()
+      
+      df_data <- df_data %>% filter(!is.na(Date)) %>% arrange(NOM, Date) 
+      if (nrow(df_data) == 0) return(message("      [WARN] Pas de données à tracer."))
+      
+      df_data <- df_data %>% group_by(NOM) %>%
+        filter(if(n() > 2000) row_number() %in% unique(round(seq(1, n(), length.out = 2000))) else TRUE) %>% ungroup()
+      
+      g_main <- ggplot() +
+        geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                  aes(x = Date, y = .data[[y_col]], color = NOM), 
+                  linetype = "solid", size = 0.7) +
+        geom_line(data = df_data %>% filter(TYPE != "solid"), 
+                  aes(x = Date, y = .data[[y_col]], color = NOM), 
+                  linetype = "dashed", size = 0.7) +
+        theme_bw() + 
+        ylab(y_lab) + xlab("Date") +
+        theme(legend.title = element_blank())
+      
+      titre_graph <- paste0("Hyéto + ", title_suffix, " ", racine, " (Pluie sur tout le bassin)")
+      
+      p_final <- subplot(rain_objs$g3, rain_objs$g1, ggplotly(g_main), 
+                         nrows = 3, shareX = TRUE, heights = c(0.1, 0.2, 0.7), titleY = TRUE) %>%
+        layout(title = list(text = titre_graph), 
+               hovermode = "closest",
+               legend = list(orientation = "v", title = list(text = "")))
+      
+      saveWidget(partial_bundle(p_final), file = output_path, selfcontained = TRUE, libdir = "lib")
+    }
+    
+    message(paste("  -> [EXPORT] Début écriture fichiers HTML"))
+    p_h_out <- file.path(dsnlayerC, paste0(racine, "_PN_PB_H_Obs.html")) 
+    save_master_plot(df_q_all, "Q", "Hydrogramme", p_q_out, "Hydrogramme")
+    save_master_plot(df_z_all, "Z", "Côtes", p_z_out, "Côtes")
+    save_master_plot(df_h_all, "H", "Hauteur", p_h_out, "Hauteur")
+    
+    # E. Flux et Ouvrages
+    name_case_clean <- paste(strsplit(f_sc, "_")[[1]][1:6], collapse = "_") 
+    p_qs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QS_Obs.html"))
+    p_qoh_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QOH_Obs.html"))
+    
+    if (!is.null(tab_out) && !file.exists(p_qs_out)) {
+      df_flux <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY|CULVERT"))
+      if (ncol(df_flux) > 0) {
+        t_flux <- meta$date_deb + (tab_out[[1]] * past_ts)
+        df_long <- df_flux %>% mutate(Time = t_flux) %>% 
+          pivot_longer(-Time) %>% filter(!is.na(value) & value != 0 & !is.na(Time)) 
+        
+        if (nrow(df_long) > 2000) {
+          idx_keep <- unique(round(seq(1, nrow(df_long), length.out = 2000)))
+          df_long <- df_long[idx_keep, ]
+        }
+        
+        if (any(grepl("FLUX", df_long$name))) {
+          g_qs <- ggplot(df_long %>% filter(grepl("FLUX", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("m3/s") + 
+            theme(legend.title = element_blank())
+          
+          p_qs <- subplot(rain_objs$g3, rain_objs$g1, ggplotly(g_qs), nrows = 3, shareX = TRUE, heights = c(0.1, 0.2, 0.7), titleY=TRUE) %>%
+            layout(title = paste("Sorties -", racine), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qs), file = p_qs_out, selfcontained = TRUE, libdir = "lib")
+        }
+        
+        if (any(grepl("CULVERT", df_long$name)) && !file.exists(p_qoh_out)) {
+          g_qoh <- ggplot(df_long %>% filter(grepl("CULVERT", name)), aes(Time, value, color = name)) + 
+            geom_line() + theme_bw() + ylab("m3/s") + 
+            theme(legend.title = element_blank())
+          
+          p_qoh <- subplot(rain_objs$g3, rain_objs$g1, ggplotly(g_qoh), nrows = 3, shareX = TRUE, heights = c(0.1, 0.2, 0.7), titleY=TRUE) %>%
+            layout(title = paste("Ouvrages -", racine), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qoh), file = p_qoh_out, selfcontained = TRUE, libdir = "lib")
+        }
+      }
+    }
+    
+    message(paste("  -> [GPKG] Mise à jour spatiale Qmax"))
+    tabmaxq <- tab_sc %>% group_by(nom) %>% filter(abs(Q) == max(abs(Q))) %>% slice(1)
+    new_sc_sf <- sc_sf %>% 
+      left_join(tabmaxq %>% dplyr::select(nom, Q, DATE, Zmoy, Hmax), by = c("ID" = "nom")) %>%
+      mutate(Q = abs(Q), NomSecteur = basename(dsnlayerC))
+    
+    st_write(new_sc_sf, file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.gpkg")), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+    file.copy(file.path(chem_routine, "C2D", Doss_Qml, "SC_Qmax.qml"), file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.qml")), overwrite = TRUE)
+  }
+  
+  if (dir.exists(file.path(dsnlayerC, "lib"))) unlink(file.path(dsnlayerC, "lib"), recursive = TRUE)
+  message(paste("[FIN]", Sys.time(), "Traitement terminé avec succès."))
+}
+
+
+
+
+
+
+
+plot_sc_obs_ohgem <- function() {
+  library(tidyverse)
+  library(sf)
+  library(plotly)
+  library(htmlwidgets)
+  library(tools)
+  
+  # --- 1. FONCTIONS UTILITAIRES ---
+  
+  get_rain_step <- function(filename, is_evt = TRUE) {
+    # 1. Recherche explicite
+    val <- as.numeric(gsub(".*[[:punct:]](\\d+)min([[:punct:]]|$).*", "\\1", filename))
+    
+    # 2. Sécurité si échec
+    if (is.na(val) || val == 0 || val > 1440) { 
+      parts <- strsplit(filename, "_")[[1]]
+      mins <- grep("^\\d+min$", parts, value = TRUE)
+      if (length(mins) > 0) {
+        val <- as.numeric(gsub("min", "", mins[1]))
+      } else {
+        # 2. Règle SHYREG / Non-Evt : Défaut à 15 min
+        val <- if (!is_evt || grepl("shyreg|spatial", filename, ignore.case = TRUE)) 15 else 1 
+      }
+    }
+    return(if(is.na(val) || val == 0) 1 else val)
+  }
+  
+  parse_time_meta <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    is_evt <- grepl("Evt", filename, fixed = TRUE)
+    duree <- 0
+    date_deb <- as.POSIXct("1900-01-01", tz="UTC")
+    
+    if (is_evt) {
+      if (length(parts) >= 5) {
+        date_deb <- strptime(gsub("[^0-9]", "", parts[4]), format = "%Y%m%d%H%M", tz = "UTC")
+        h_m <- strsplit(parts[5], "h")[[1]]
+        if(length(h_m) >= 2) duree <- (as.numeric(h_m[1]) + as.numeric(substr(h_m[2], 1, 2)) / 60) * 3600
+      }
+    } else {
+      if (length(parts) >= 8) {
+        duree <- (as.numeric(parts[7]) + as.numeric(parts[8]) / 60) * 3600
+      }
+    }
+    list(date_deb = as.POSIXct(date_deb), duree = duree, is_evt = is_evt)
+  }
+  
+  parse_telemac_sortie <- function(file_path) {
+    message(paste("    [DEBUG]", Sys.time(), "- Lecture sortie:", basename(file_path)))
+    if (!file.exists(file_path)) return(NULL)
+    
+    past_ts <- NA
+    dir_path <- dirname(file_path)
+    base_name <- basename(file_path)
+    cas_name_candidate <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", base_name)
+    
+    if (cas_name_candidate == base_name) {
+      cas_name_candidate <- substr(base_name, 1, nchar(base_name) - 30)
+    }
+    
+    cas_files <- list.files(dir_path, pattern = paste0("^", create_regex_safe(cas_name_candidate)), full.names = TRUE)
+    cas_files <- cas_files[!grepl("\\.sortie$", cas_files)]
+    
+    if (length(cas_files) > 0) {
+      lines_cas <- readLines(cas_files[1], warn = FALSE)
+      ts_idx_cas <- grep("TIME STEP|PAS DE TEMPS", lines_cas, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx_cas)) {
+        raw_line <- lines_cas[ts_idx_cas]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .cas :", past_ts))
+      }
+    }
+    
+    lines <- readLines(file_path, warn = FALSE)
+    
+    if (is.na(past_ts)) {
+      ts_idx <- grep("TIME STEP|PAS DE TEMPS", lines, useBytes = TRUE, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx)) {
+        raw_line <- lines[ts_idx]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .sortie :", past_ts))
+      }
+    }
+    
+    if (is.na(past_ts)) {
+      message("    [WARN] TIME STEP introuvable. Valeur par défaut 1.0 utilisée.")
+      past_ts <- 1.0
+    }
+    
+    idx_interest <- grep("ITERATION|FLUX BOUNDARY|CULVERT|RUNOFF_SCS_CN|VOLUME IN THE DOMAIN|ADDITIONAL VOLUME", lines, useBytes = TRUE)
+    if (length(idx_interest) == 0) return(NULL)
+    ls <- lines[idx_interest]
+    
+    clean_numeric <- function(txt) {
+      txt <- gsub("[*]", "", txt)
+      as.numeric(txt)
+    }
+    
+    mots_cles <- tribble(
+      ~key, ~start, ~end,
+      "ITERATION ", 12, 22,
+      "RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61,
+      "VOLUME IN THE DOMAIN", 28, 44,
+      "ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61
+    )
+    
+    flux_keys <- unique(gsub(":.*", "", grep("FLUX BOUNDARY", ls, value = TRUE, useBytes = TRUE)))
+    culvert_keys <- unique(gsub(":.*", "", grep("CULVERT", ls, value = TRUE, useBytes = TRUE)))
+    
+    extra <- tibble(key = c(flux_keys, culvert_keys)) %>%
+      mutate(start = if_else(grepl("CULVERT", key), 37, 25), end = if_else(grepl("CULVERT", key), 62, 42))
+    
+    all_keys <- bind_rows(mots_cles, extra)
+    ref_idx <- grep("ITERATION ", ls, useBytes = TRUE)
+    res <- matrix(NA, nrow = length(ref_idx), ncol = nrow(all_keys))
+    
+    for (i in 1:nrow(mots_cles)) {
+      m <- grep(mots_cles$key[i], ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m) > 0) {
+        vals <- clean_numeric(substr(ls[m], mots_cles$start[i], mots_cles$end[i]))
+        indices <- findInterval(m, ref_idx)
+        valid <- indices > 0 & indices <= nrow(res)
+        col_idx <- match(mots_cles$key[i], all_keys$key)
+        res[indices[valid], col_idx] <- vals[valid]
+      }
+    }
+    
+    if (length(flux_keys) > 0) {
+      m_flux <- grep("FLUX BOUNDARY", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_flux) > 0) {
+        txt_flux <- ls[m_flux]
+        vals_flux <- clean_numeric(substr(txt_flux, 25, 42))
+        keys_flux <- gsub(":.*", "", txt_flux)
+        rows <- findInterval(m_flux, ref_idx)
+        cols <- match(keys_flux, all_keys$key)
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_flux[valid]
+      }
+    }
+    
+    if (length(culvert_keys) > 0) {
+      m_cul <- grep("CULVERT", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_cul) > 0) {
+        txt_cul <- ls[m_cul]
+        vals_cul <- clean_numeric(substr(txt_cul, 37, 62))
+        keys_cul <- gsub(":.*", "", txt_cul)
+        rows <- findInterval(m_cul, ref_idx)
+        cols <- match(keys_cul, all_keys$key)
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_cul[valid]
+      }
+    }
+    
+    df <- as.data.frame(res)
+    colnames(df) <- all_keys$key
+    df$Past_Ts <- past_ts
+    df <- df[!is.na(df[, 1]), ] 
+    
+    message(paste("    [DEBUG] Parsing fini. Lignes:", nrow(df)))
+    gc() 
+    return(df)
+  }
+  
+  create_regex_safe <- function(str) {
+    gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", str)
+  }
+  
+  # --- 2. INITIALISATION ---
+  message(paste("[INFO]", Sys.time(), "Start plot_sc_obs_oh"))
+  sc_list <- list.files(dsnlayerC, pattern = "SC.txt")
+  list_sortie <- list.files(dsnlayerC, pattern = "s.sortie")
+  list_sortie <- list_sortie[!grepl("\\.txt$", list_sortie)]
+  
+  if (length(sc_list) == 0) return(message("Aucun SC.txt trouvé."))
+  
+  path_shp <- file.path(dsnlayerC, "SectControl_Select.shp")
+  sc_sf <- st_read(path_shp, quiet = TRUE) %>% mutate(ID = as.character(ID))
+  contour_aire <- st_read(file.path(dsnlayerC, "Step_Cartino2d_1_Contour.shp"), quiet = TRUE)
+  aire_val <- as.numeric(st_area(contour_aire))
+  dsnscobs <- file.path(dsnlayer, "_SectionsControles", contour$NOMPOST)
+  
+  cache_sortie <- list()      
+  cache_rain_plots <- list()  
+  
+  # --- 3. BOUCLE PRINCIPALE ---
+  
+  for (f_sc in sc_list) {
+    message(paste("----------------------------------------------------------------"))
+    message(paste("[STEP] Traitement :", f_sc))
+    
+    # 1. Racine pour le matching interne (sans SC)
+    racine_match <- sub("SC\\.txt$", "", f_sc)
+    
+    # 2. Racine pour le nommage des fichiers (avec SC s'il y est, sans extension)
+    racine_nom <- tools::file_path_sans_ext(f_sc)
+    
+    # Définition précoce des chemins de sortie avec la bonne racine
+    p_q_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Q_Obs.html"))
+    p_z_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Z_Obs.html"))
+    p_h_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_H_Obs.html"))
+    
+    if (file.exists(p_q_out) && file.exists(p_z_out)) {
+      message("  -> [SKIP] Fichiers existants.")
+      next
+    }
+    
+    meta <- parse_time_meta(f_sc)
+    f_out_match <- list_sortie[grep(racine_match, list_sortie)]
+    
+    if (length(f_out_match) == 0) {
+      message("  -> [WARN] .sortie introuvable.")
+      tab_out <- NULL
+    } else {
+      if (length(f_out_match) > 1) {
+        dates_out <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", f_out_match)
+        f_out_match <- f_out_match[which.max(as.POSIXct(dates_out, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
+      }
+      if (is.null(cache_sortie[[f_out_match]])) {
+        cache_sortie[[f_out_match]] <- parse_telemac_sortie(file.path(dsnlayerC, f_out_match))
+      }
+      tab_out <- cache_sortie[[f_out_match]]
+    }
+    
+    rain_objs <- NULL 
+    
+    if (!is.null(tab_out)) {
+      dir_pluie <- tryCatch(file.path(dsnPluie, contour$NOMPOST), error = function(e) NULL)
+      file_brute <- NA
+      
+      if (!is.null(dir_pluie) && dir.exists(dir_pluie)) {
+        all_brutes <- list.files(dir_pluie, pattern = "^(brute|shyreg|spatial)_.*\\.txt$", full.names = TRUE)
+        if (length(all_brutes) > 0) {
+          clean_sc <- sub("SC\\.txt$", "", f_sc)
+          parts_sc <- strsplit(clean_sc, "_")[[1]]
+          
+          dur_token <- grep("^\\d+min$", parts_sc, value = TRUE)
+          if(length(dur_token) == 0) dur_token <- "IGNORE_ME" else dur_token <- dur_token[1]
+          
+          evt_token <- grep("^Evts\\d+", parts_sc, value = TRUE)
+          if(length(evt_token) == 0) evt_token <- "IGNORE_ME" else evt_token <- evt_token[1]
+          
+          candidates <- all_brutes
+          if (dur_token != "IGNORE_ME") {
+            has_dur <- grepl(paste0("_", dur_token, "([_.]|$)"), basename(candidates)) | grepl(dur_token, basename(candidates), fixed = TRUE)
+            if (any(has_dur)) candidates <- candidates[has_dur]
+          }
+          if (evt_token != "IGNORE_ME") {
+            has_evt <- grepl(evt_token, basename(candidates))
+            if (any(has_evt)) candidates <- candidates[has_evt]
+          }
+          if (length(candidates) > 0) {
+            scores <- sapply(candidates, function(cand) {
+              parts_cand <- strsplit(basename(cand), "_")[[1]]
+              sum(parts_cand %in% parts_sc)
+            })
+            file_brute <- candidates[which.max(scores)]
+            message(paste("    -> [BRUTE] Trouvé:", basename(file_brute)))
+          }
+        }
+      }
+      
+      cache_key_rain <- paste0(f_out_match, ifelse(!is.na(file_brute), basename(file_brute), "NONE"))
+      
+      if (is.null(cache_rain_plots[[cache_key_rain]])) {
+        past_ts <- tab_out$Past_Ts[1]
+        if (is.na(past_ts)) past_ts <- 1.0
+        
+        if (nrow(tab_out) > 1) {
+          delta_iter <- median(diff(tab_out[[1]]), na.rm = TRUE)
+          pas_exp <- delta_iter * past_ts
+        } else {
+          pas_exp <- past_ts
+        }
+        if (is.na(pas_exp) || pas_exp <= 0) pas_exp <- 1.0
+        message(paste("    -> [INFO] Pas d'export:", pas_exp, "s"))
+        
+        t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        
+        # --- CALCUL PLUIE DEFAUT (TELEMAC) AVEC DECUMULATION ---
+        acc_rain <- replace_na(tab_out[[2]], 0)
+        inc_rain <- c(acc_rain[1], diff(acc_rain))
+        inc_rain[inc_rain < 0] <- 0 
+        
+        df_pluie <- data.frame(
+          Time = t_axis,
+          Intensite = inc_rain * 1000 * 3600 / pas_exp, 
+          PNette = replace_na(tab_out[[4]], 0) / aire_val * 1000 * 3600 / past_ts,
+          CumulBrut = replace_na(tab_out[[2]], 0) * 1000, 
+          CumulNet = cumsum(replace_na(tab_out[[4]], 0) / aire_val * pas_exp / past_ts) * 1000,
+          NomBrut = "Pluie brute", NomNet = "Pluie nette"
+        )
+        
+        # --- CORRECTION PLUIE BRUTE (MAPPING DIRECT) ---
+        if (!is.na(file_brute) && file.exists(file_brute)) {
+          tab_brute <- read.table(file_brute, header = TRUE)
+          rain_step <- get_rain_step(basename(file_brute), is_evt = meta$is_evt)
+          message(paste("    -> [BRUTE] Step:", rain_step, "min"))
+          
+          col_val <- if("Val" %in% names(tab_brute)) "Val" else names(tab_brute)[2]
+          
+          n_out <- nrow(df_pluie)
+          if (nrow(tab_brute) >= n_out) {
+            raw_vals <- tab_brute[[col_val]][1:n_out]
+          } else {
+            raw_vals <- c(tab_brute[[col_val]], rep(0, n_out - nrow(tab_brute)))
+          }
+          
+          df_pluie$CumulBrut <- cumsum(raw_vals / rain_step)
+          df_pluie$Intensite <- raw_vals * 3600 / (pas_exp * rain_step)
+        }
+        
+        df_pluie <- df_pluie %>% filter(!is.na(Time))
+        
+        if (nrow(df_pluie) > 2000) {
+          idx_keep <- unique(round(seq(1, nrow(df_pluie), length.out = 2000)))
+          df_pluie <- df_pluie[idx_keep, ]
+        }
+        
+        if (nrow(df_pluie) > 0) {
+          cols_hyeto <- c("Pluie brute" = "#33FFFF", "Pluie nette" = "#9933FF")
+          cols_cumul <- c("Cumul brut" = "#33FFFF", "Cumul net" = "#9933FF")
+          
+          g1 <- ggplotly(ggplot(df_pluie) +
+                           geom_col(aes(x = Time, y = Intensite, fill = "Pluie brute"), position = "identity", width = pas_exp) +
+                           geom_col(aes(x = Time, y = PNette, fill = "Pluie nette"), position = "identity", width = pas_exp) +
+                           scale_fill_manual(name="", values = cols_hyeto) + 
+                           theme_bw() + ylab("Intensité [mm/h]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()))
+          
+          g3 <- ggplotly(ggplot(df_pluie) +
+                           geom_line(aes(x = Time, y = CumulBrut, color = "Cumul brut"), size = 1.1) +
+                           geom_line(aes(x = Time, y = CumulNet, color = "Cumul net"), size = 1.1) +
+                           scale_color_manual(name="", values = cols_cumul) + 
+                           theme_bw() + ylab("Cumul [mm]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()))
+          
+          cache_rain_plots[[cache_key_rain]] <- list(g1 = g1, g3 = g3, t_axis = t_axis)
+        } else {
+          cache_rain_plots[[cache_key_rain]] <- NULL
+        }
+      }
+      rain_objs <- cache_rain_plots[[cache_key_rain]]
+    } else {
+      rain_objs <- NULL
+    }
+    
+    if (is.null(rain_objs)) {
+      message("    [WARN] Données pluie invalides ou manquantes.")
+      rain_objs <- list(g1 = NULL, g3 = NULL, t_axis = NULL)
+    }
+    
+    message("  -> [DATA] SC + Obs")
+    cl_names <- c("nom", "numsec", "Time", "Q", "Zmoy", "Zmax", "Zmin", "Hmax", "Htot")
+    tab_sc <- read.csv(file.path(dsnlayerC, f_sc), header = FALSE, sep = "", skip = 2, col.names = cl_names)
+    tab_sc <- tab_sc %>% filter(as.numeric(Time) >= 60)
+    tab_sc[, 2:9] <- lapply(tab_sc[, 2:9], as.numeric)
+    tab_sc$DATE <- meta$date_deb + tab_sc$Time
+    tab_sc$nom <- as.character(tab_sc$nom)
+    tab_sc <- inner_join(tab_sc, sc_sf, by = c("nom" = "ID"))
+    
+    sc_names <- unique(tab_sc$NOM)
+    sc_list_obs <- list.files(path = dsnscobs, full.names = TRUE)
+    
+    load_obs <- function(suffix, col_name) {
+      files_match <- unlist(lapply(sc_names, function(x) grep(paste0(x, suffix), sc_list_obs, value = TRUE)))
+      if (length(files_match) == 0) return(NULL)
+      df_list <- lapply(files_match, read.csv)
+      df_obs <- do.call(rbind, df_list)
+      df_obs$Date <- as.POSIXct(ifelse(grepl(" ", df_obs$Date), df_obs$Date, paste(df_obs$Date, "00:00:00")), tz = "UTC")
+      df_obs <- df_obs %>% filter(Date >= min(tab_sc$DATE) & Date <= max(tab_sc$DATE))
+      if (nrow(df_obs) > 0) {
+        colnames(df_obs) <- c("Date", col_name, "NOM")
+        df_obs$NOM <- paste0(df_obs$NOM, "_obs")
+        return(df_obs)
+      }
+      return(NULL)
+    }
+    
+    obs_q <- load_obs("_Q.csv", "Q")
+    df_q_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, Q, NOM) %>% mutate(Q = abs(Q), TYPE = "solid"),
+                          if (!is.null(obs_q)) obs_q %>% mutate(Q = abs(Q), TYPE = "dashed") else NULL)
+    
+    obs_z <- load_obs("_Z.csv", "Z")
+    df_z_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, Z = Zmoy, NOM) %>% mutate(Z = ifelse(Z == 0, NA, Z), TYPE = "solid"),
+                          if (!is.null(obs_z)) obs_z %>% mutate(TYPE = "dashed") else NULL)
+    
+    obs_h <- load_obs("_H.csv", "H")
+    df_h_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, H = Hmax, NOM) %>% mutate(TYPE = "solid"),
+                          if (!is.null(obs_h)) obs_h %>% mutate(TYPE = "dashed") else NULL)
+    
+    save_master_plot <- function(df_data, y_col, y_lab, output_path, title_suffix) {
+      if (file.exists(output_path)) return()
+      df_data <- df_data %>% filter(!is.na(Date)) %>% arrange(NOM, Date)
+      if (nrow(df_data) == 0) return()
+      
+      df_data <- df_data %>% group_by(NOM) %>%
+        filter(if(n() > 2000) row_number() %in% unique(round(seq(1, n(), length.out = 2000))) else TRUE) %>% ungroup()
+      
+      g_main <- ggplot()
+      
+      df_solid <- df_data %>% filter(TYPE == "solid")
+      if(nrow(df_solid) > 0) {
+        g_main <- g_main + geom_line(data = df_solid, aes(x = Date, y = .data[[y_col]], color = NOM), linetype = "solid", size = 0.7)
+      }
+      
+      df_dashed <- df_data %>% filter(TYPE != "solid")
+      if(nrow(df_dashed) > 0) {
+        g_main <- g_main + geom_line(data = df_dashed, aes(x = Date, y = .data[[y_col]], color = NOM), linetype = "dashed", size = 0.7)
+      }
+      
+      g_main <- g_main + theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+      
+      titre <- paste0("Hyéto + ", title_suffix, " ", racine_nom, " (Pluie sur tout le bassin)")
+      
+      plots_list <- list()
+      heights <- c()
+      rows_val <- 0
+      
+      has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+      
+      if (has_rain) {
+        plots_list[[1]] <- rain_objs$g3
+        plots_list[[2]] <- rain_objs$g1
+        plots_list[[3]] <- ggplotly(g_main)
+        heights <- c(0.1, 0.2, 0.7)
+        rows_val <- 3
+      } else {
+        plots_list[[1]] <- ggplotly(g_main)
+        heights <- c(1)
+        rows_val <- 1
+      }
+      
+      p_final <- subplot(plots_list, nrows = rows_val, shareX = TRUE, heights = heights, titleY = TRUE) %>%
+        layout(title = list(text = titre), hovermode = "closest", legend = list(title = list(text = "")))
+      saveWidget(partial_bundle(p_final), file = output_path, selfcontained = TRUE, libdir = "lib")
+    }
+    
+    message("  -> [EXPORT] HTML Q/Z/H")
+    save_master_plot(df_q_all, "Q", "Débit [m3/s]", p_q_out, "Hydrogramme")
+    save_master_plot(df_z_all, "Z", "Côte [m]", p_z_out, "Côtes")
+    save_master_plot(df_h_all, "H", "Hauteur [m]", p_h_out, "Hauteur")
+    
+    name_case_clean <- paste(strsplit(f_sc, "_")[[1]][1:6], collapse = "_") 
+    p_qs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QS_Obs.html"))
+    p_qoh_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QOH_Obs.html"))
+    
+    if (!is.null(tab_out) && !file.exists(p_qs_out)) {
+      df_flux <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY|CULVERT"))
+      if (ncol(df_flux) > 0) {
+        t_flux <- meta$date_deb + (tab_out[[1]] * past_ts)
+        df_long <- df_flux %>% mutate(Time = t_flux) %>% 
+          pivot_longer(-Time) %>% filter(!is.na(value) & value != 0 & !is.na(Time)) 
+        
+        if (nrow(df_long) > 2000) {
+          idx_keep <- unique(round(seq(1, nrow(df_long), length.out = 2000)))
+          df_long <- df_long[idx_keep, ]
+        }
+        
+        if (any(grepl("FLUX", df_long$name))) {
+          g_qs <- ggplot(df_long %>% filter(grepl("FLUX", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qs)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qs)
+            h <- c(1); r <- 1
+          }
+          p_qs <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Sorties -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qs), file = p_qs_out, selfcontained = TRUE, libdir = "lib")
+        }
+        
+        if (any(grepl("CULVERT", df_long$name)) && !file.exists(p_qoh_out)) {
+          g_qoh <- ggplot(df_long %>% filter(grepl("CULVERT", name)), aes(Time, value, color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qoh)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qoh)
+            h <- c(1); r <- 1
+          }
+          p_qoh <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Ouvrages -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qoh), file = p_qoh_out, selfcontained = TRUE, libdir = "lib")
+        }
+      }
+    }
+    
+    message("  -> [GPKG] Qmax")
+    tabmaxq <- tab_sc %>% group_by(nom) %>% filter(abs(Q) == max(abs(Q))) %>% slice(1)
+    new_sc_sf <- sc_sf %>% 
+      left_join(tabmaxq %>% dplyr::select(nom, Q, DATE, Zmoy, Hmax), by = c("ID" = "nom")) %>%
+      mutate(Q = abs(Q), NomSecteur = basename(dsnlayerC))
+    st_write(new_sc_sf, file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.gpkg")), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+    file.copy(file.path(chem_routine, "C2D", Doss_Qml, "SC_Qmax.qml"), file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.qml")), overwrite = TRUE)
+  }
+  
+  if (dir.exists(file.path(dsnlayerC, "lib"))) unlink(file.path(dsnlayerC, "lib"), recursive = TRUE)
+  message("[FIN] Terminé.")
+}
+plot_sc_obs_oh <- function() {
+  library(tidyverse)
+  library(sf)
+  library(plotly)
+  library(htmlwidgets)
+  library(tools)
+  
+  # --- 1. FONCTIONS UTILITAIRES ---
+  
+  get_rain_step <- function(filename, is_evt = TRUE) {
+    # 1. Recherche explicite
+    val <- as.numeric(gsub(".*[[:punct:]](\\d+)min([[:punct:]]|$).*", "\\1", filename))
+    
+    # 2. Sécurité si échec
+    if (is.na(val) || val == 0 || val > 1440) { 
+      parts <- strsplit(filename, "_")[[1]]
+      mins <- grep("^\\d+min$", parts, value = TRUE)
+      if (length(mins) > 0) {
+        val <- as.numeric(gsub("min", "", mins[1]))
+      } else {
+        # 2. Règle SHYREG / Non-Evt : Défaut à 15 min
+        val <- if (!is_evt || grepl("shyreg|spatial", filename, ignore.case = TRUE)) 15 else 1 
+      }
+    }
+    return(if(is.na(val) || val == 0) 1 else val)
+  }
+  
+  parse_time_meta <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    is_evt <- grepl("Evt", filename, fixed = TRUE)
+    duree <- 0
+    date_deb <- as.POSIXct("1900-01-01", tz="UTC")
+    
+    if (is_evt) {
+      if (length(parts) >= 5) {
+        date_deb <- strptime(gsub("[^0-9]", "", parts[4]), format = "%Y%m%d%H%M", tz = "UTC")
+        h_m <- strsplit(parts[5], "h")[[1]]
+        if(length(h_m) >= 2) duree <- (as.numeric(h_m[1]) + as.numeric(substr(h_m[2], 1, 2)) / 60) * 3600
+      }
+    } else {
+      if (length(parts) >= 8) {
+        duree <- (as.numeric(parts[7]) + as.numeric(parts[8]) / 60) * 3600
+      }
+    }
+    list(date_deb = as.POSIXct(date_deb), duree = duree, is_evt = is_evt)
+  }
+  
+  parse_telemac_sortie <- function(file_path) {
+    message(paste("    [DEBUG]", Sys.time(), "- Lecture sortie:", basename(file_path)))
+    if (!file.exists(file_path)) return(NULL)
+    
+    # --- A. Récupération du TIME STEP (Strategie .cas puis .sortie) ---
+    past_ts <- NA
+    dir_path <- dirname(file_path)
+    base_name <- basename(file_path)
+    # Regex pour enlever _YYYY-MM-DD-HHhMMminSSs.sortie
+    cas_name_candidate <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", base_name)
+    
+    if (cas_name_candidate == base_name) {
+      cas_name_candidate <- substr(base_name, 1, nchar(base_name) - 30)
+    }
+    
+    cas_files <- list.files(dir_path, pattern = paste0("^", create_regex_safe(cas_name_candidate)), full.names = TRUE)
+    cas_files <- cas_files[!grepl("\\.sortie$", cas_files)]
+    
+    if (length(cas_files) > 0) {
+      lines_cas <- readLines(cas_files[1], warn = FALSE)
+      ts_idx_cas <- grep("TIME STEP|PAS DE TEMPS", lines_cas, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx_cas)) {
+        raw_line <- lines_cas[ts_idx_cas]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .cas :", past_ts))
+      }
+    }
+    
+    lines <- readLines(file_path, warn = FALSE)
+    
+    if (is.na(past_ts)) {
+      ts_idx <- grep("TIME STEP|PAS DE TEMPS", lines, useBytes = TRUE, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx)) {
+        raw_line <- lines[ts_idx]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .sortie :", past_ts))
+      }
+    }
+    
+    if (is.na(past_ts)) {
+      message("    [WARN] TIME STEP introuvable. Valeur par défaut 1.0 utilisée.")
+      past_ts <- 1.0
+    }
+    
+    # --- B. Parsing des données ---
+    idx_interest <- grep("ITERATION|FLUX BOUNDARY|CULVERT|RUNOFF_SCS_CN|VOLUME IN THE DOMAIN|ADDITIONAL VOLUME", lines, useBytes = TRUE)
+    if (length(idx_interest) == 0) return(NULL)
+    ls <- lines[idx_interest]
+    
+    clean_numeric <- function(txt) {
+      txt <- gsub("[*]", "", txt)
+      as.numeric(txt)
+    }
+    
+    mots_cles <- tribble(
+      ~key, ~start, ~end,
+      "ITERATION ", 12, 22,
+      "RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61,
+      "VOLUME IN THE DOMAIN", 28, 44,
+      "ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61
+    )
+    
+    # Identification propre des noms de colonnes (Regex strict : NOM + ESPACES + CHIFFRES)
+    flux_raw <- grep("FLUX BOUNDARY", ls, value = TRUE, useBytes = TRUE)
+    flux_keys <- unique(sub(".*(FLUX BOUNDARY\\s+\\d+).*", "\\1", flux_raw))
+    
+    cul_raw <- grep("CULVERT", ls, value = TRUE, useBytes = TRUE)
+    culvert_keys <- unique(sub(".*(CULVERT\\s+\\d+).*", "\\1", cul_raw))
+    
+    extra <- tibble(key = c(flux_keys, culvert_keys)) %>%
+      mutate(start = if_else(grepl("CULVERT", key), 37, 25), end = if_else(grepl("CULVERT", key), 62, 42))
+    
+    all_keys <- bind_rows(mots_cles, extra)
+    ref_idx <- grep("ITERATION ", ls, useBytes = TRUE)
+    res <- matrix(NA, nrow = length(ref_idx), ncol = nrow(all_keys))
+    
+    for (i in 1:nrow(mots_cles)) {
+      m <- grep(mots_cles$key[i], ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m) > 0) {
+        vals <- clean_numeric(substr(ls[m], mots_cles$start[i], mots_cles$end[i]))
+        indices <- findInterval(m, ref_idx)
+        valid <- indices > 0 & indices <= nrow(res)
+        col_idx <- match(mots_cles$key[i], all_keys$key)
+        res[indices[valid], col_idx] <- vals[valid]
+      }
+    }
+    
+    if (length(flux_keys) > 0) {
+      m_flux <- grep("FLUX BOUNDARY", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_flux) > 0) {
+        txt_flux <- ls[m_flux]
+        vals_flux <- clean_numeric(substr(txt_flux, 25, 42))
+        
+        # Extraction propre du nom pour le matching
+        keys_flux <- sub(".*(FLUX BOUNDARY\\s+\\d+).*", "\\1", txt_flux)
+        
+        rows <- findInterval(m_flux, ref_idx)
+        cols <- match(keys_flux, all_keys$key)
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_flux[valid]
+      }
+    }
+    
+    if (length(culvert_keys) > 0) {
+      m_cul <- grep("CULVERT", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_cul) > 0) {
+        txt_cul <- ls[m_cul]
+        vals_cul <- clean_numeric(substr(txt_cul, 37, 62))
+        
+        # Extraction propre du nom pour le matching
+        keys_cul <- sub(".*(CULVERT\\s+\\d+).*", "\\1", txt_cul)
+        
+        rows <- findInterval(m_cul, ref_idx)
+        cols <- match(keys_cul, all_keys$key)
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_cul[valid]
+      }
+    }
+    
+    df <- as.data.frame(res)
+    colnames(df) <- all_keys$key
+    df$Past_Ts <- past_ts
+    df <- df[!is.na(df[, 1]), ] 
+    
+    message(paste("    [DEBUG] Parsing fini. Lignes:", nrow(df)))
+    gc() 
+    return(df)
+  }
+  
+  create_regex_safe <- function(str) {
+    gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", str)
+  }
+  
+  # --- 2. INITIALISATION ---
+  message(paste("[INFO]", Sys.time(), "Start plot_sc_obs_oh"))
+  sc_list <- list.files(dsnlayerC, pattern = "SC.txt")
+  list_sortie <- list.files(dsnlayerC, pattern = "s.sortie")
+  list_sortie <- list_sortie[!grepl("\\.txt$", list_sortie)]
+  
+  if (length(sc_list) == 0) return(message("Aucun SC.txt trouvé."))
+  
+  path_shp <- file.path(dsnlayerC, "SectControl_Select.shp")
+  sc_sf <- st_read(path_shp, quiet = TRUE) %>% mutate(ID = as.character(ID))
+  contour_aire <- st_read(file.path(dsnlayerC, "Step_Cartino2d_1_Contour.shp"), quiet = TRUE)
+  aire_val <- as.numeric(st_area(contour_aire))
+  dsnscobs <- file.path(dsnlayer, "_SectionsControles", contour$NOMPOST)
+  
+  cache_sortie <- list()      
+  cache_rain_plots <- list()  
+  
+  # --- 3. BOUCLE PRINCIPALE ---
+  
+  for (f_sc in sc_list) {
+    message(paste("----------------------------------------------------------------"))
+    message(paste("[STEP] Traitement :", f_sc))
+    
+    # 1. Racine pour le matching interne (sans SC)
+    racine_match <- sub("SC\\.txt$", "", f_sc)
+    
+    # 2. Racine pour le nommage des fichiers SC (avec SC s'il y est, sans extension)
+    racine_nom <- tools::file_path_sans_ext(f_sc)
+    
+    # Définition précoce des chemins de sortie avec la bonne racine
+    p_q_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Q_Obs.html"))
+    p_z_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Z_Obs.html"))
+    p_h_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_H_Obs.html"))
+    
+    if (file.exists(p_q_out) && file.exists(p_z_out)) {
+      message("  -> [SKIP] Fichiers existants.")
+      next
+    }
+    
+    meta <- parse_time_meta(f_sc)
+    f_out_match <- list_sortie[grep(racine_match, list_sortie)]
+    
+    if (length(f_out_match) == 0) {
+      message("  -> [WARN] .sortie introuvable.")
+      tab_out <- NULL
+    } else {
+      if (length(f_out_match) > 1) {
+        dates_out <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", f_out_match)
+        f_out_match <- f_out_match[which.max(as.POSIXct(dates_out, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
+      }
+      if (is.null(cache_sortie[[f_out_match]])) {
+        cache_sortie[[f_out_match]] <- parse_telemac_sortie(file.path(dsnlayerC, f_out_match))
+      }
+      tab_out <- cache_sortie[[f_out_match]]
+    }
+    
+    rain_objs <- NULL 
+    
+    if (!is.null(tab_out)) {
+      dir_pluie <- tryCatch(file.path(dsnPluie, contour$NOMPOST), error = function(e) NULL)
+      file_brute <- NA
+      
+      if (!is.null(dir_pluie) && dir.exists(dir_pluie)) {
+        all_brutes <- list.files(dir_pluie, pattern = "^(brute)_.*\\.txt$", full.names = TRUE)
+        if (length(all_brutes) > 0) {
+          clean_sc <- sub("SC\\.txt$", "", f_sc)
+          parts_sc <- strsplit(clean_sc, "_")[[1]]
+          
+          dur_token <- grep("^\\d+min$", parts_sc, value = TRUE)
+          if(length(dur_token) == 0) dur_token <- "IGNORE_ME" else dur_token <- dur_token[1]
+          
+          evt_token <- grep("^Evts\\d+", parts_sc, value = TRUE)
+          if(length(evt_token) == 0) evt_token <- "IGNORE_ME" else evt_token <- evt_token[1]
+          
+          candidates <- all_brutes
+          if (dur_token != "IGNORE_ME") {
+            has_dur <- grepl(paste0("_", dur_token, "([_.]|$)"), basename(candidates)) | grepl(dur_token, basename(candidates), fixed = TRUE)
+            if (any(has_dur)) candidates <- candidates[has_dur]
+          }
+          if (evt_token != "IGNORE_ME") {
+            has_evt <- grepl(evt_token, basename(candidates))
+            if (any(has_evt)) candidates <- candidates[has_evt]
+          }
+          if (length(candidates) > 0) {
+            scores <- sapply(candidates, function(cand) {
+              parts_cand <- strsplit(basename(cand), "_")[[1]]
+              sum(parts_cand %in% parts_sc)
+            })
+            file_brute <- candidates[which.max(scores)]
+            message(paste("    -> [BRUTE] Trouvé:", basename(file_brute)))
+          }
+        }
+      }
+      
+      cache_key_rain <- paste0(f_out_match, ifelse(!is.na(file_brute), basename(file_brute), "NONE"))
+      
+      if (is.null(cache_rain_plots[[cache_key_rain]])) {
+        past_ts <- tab_out$Past_Ts[1]
+        if (is.na(past_ts)) past_ts <- 1.0
+        
+        if (nrow(tab_out) > 1) {
+          pas_exp <- median(diff(tab_out[[1]]), na.rm = TRUE) * past_ts
+        } else {
+          pas_exp <- past_ts
+        }
+        if (is.na(pas_exp) || pas_exp <= 0) pas_exp <- 1.0
+        message(paste("    -> [INFO] Pas d'export:", pas_exp, "s"))
+        
+        t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        
+        # --- CALCUL PLUIE DEFAUT (TELEMAC) AVEC DECUMULATION ---
+        acc_rain <- replace_na(tab_out[[2]], 0)
+        inc_rain <- c(acc_rain[1], diff(acc_rain))
+        inc_rain[inc_rain < 0] <- 0 
+        
+        df_pluie <- data.frame(
+          Time = t_axis,
+          Intensite = inc_rain * 1000 * 3600 / pas_exp, 
+          PNette = replace_na(tab_out[[4]], 0) / aire_val * 1000 * 3600 / past_ts,
+          CumulBrut = replace_na(tab_out[[2]], 0) * 1000, 
+          CumulNet = cumsum(replace_na(tab_out[[4]], 0) / aire_val * pas_exp / past_ts) * 1000,
+          NomBrut = "Pluie brute", NomNet = "Pluie nette"
+        )
+        bar_shift=0
+        # --- CORRECTION PLUIE BRUTE (MAPPING DIRECT) ---
+        if (!is.na(file_brute) && file.exists(file_brute)) {
+          tab_brute <- read.table(file_brute, header = TRUE)
+          rain_step <- get_rain_step(basename(file_brute), is_evt = meta$is_evt)
+          message(paste("    -> [BRUTE] Step:", rain_step, "min"))
+          bar_shift <- pas_exp 
+          col_val <- if("Val" %in% names(tab_brute)) "Val" else names(tab_brute)[2]
+          
+          n_out <- nrow(df_pluie)
+          if (nrow(tab_brute) >= n_out) {
+            raw_vals <- tab_brute[[col_val]][1:n_out]
+          } else {
+            raw_vals <- c(tab_brute[[col_val]], rep(0, n_out - nrow(tab_brute)))
+          }
+          
+          df_pluie$CumulBrut <- cumsum(raw_vals / rain_step)
+          df_pluie$Intensite <- raw_vals * 3600 / (pas_exp * rain_step)
+        }
+        
+        df_pluie <- df_pluie %>% filter(!is.na(Time))
+        
+        # if (nrow(df_pluie) > 2000) {
+        #   idx_keep <- unique(round(seq(1, nrow(df_pluie), length.out = 2000)))
+        #   df_pluie <- df_pluie[idx_keep, ]
+        # }
+        
+        if (nrow(df_pluie) > 0) {
+          cols_hyeto <- c("Pluie brute" = "#33FFFF", "Pluie nette" = "#9933FF")
+          cols_cumul <- c("Cumul brut" = "#33FFFF", "Cumul net" = "#9933FF")
+          # Fix: x = Time - bar_shift. Si bar_shift=0 (défaut), centré sur Time. Sinon décalé.
+          g1 <- ggplotly(ggplot(df_pluie) +
+                           geom_col(aes(x = Time + bar_shift, y = Intensite, fill = "Pluie brute"), position = "identity",width = pas_exp ) +
+                           geom_col(aes(x = Time, y = PNette, fill = "Pluie nette"), position = "identity",width = pas_exp) +
+                           scale_fill_manual(name="", values = cols_hyeto) + 
+                           theme_bw() + ylab("Intensité [mm/h]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()))
+          
+          g3 <- ggplotly(ggplot(df_pluie) +
+                           geom_line(aes(x = Time, y = CumulBrut, color = "Cumul brut"), size = 1.1) +
+                           geom_line(aes(x = Time, y = CumulNet, color = "Cumul net"), size = 1.1) +
+                           scale_color_manual(name="", values = cols_cumul) + 
+                           theme_bw() + ylab("Cumul [mm]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()))
+          
+          cache_rain_plots[[cache_key_rain]] <- list(g1 = g1, g3 = g3, t_axis = t_axis)
+        } else {
+          cache_rain_plots[[cache_key_rain]] <- NULL
+        }
+      }
+      rain_objs <- cache_rain_plots[[cache_key_rain]]
+    } else {
+      rain_objs <- NULL
+    }
+    
+    if (is.null(rain_objs)) {
+      message("    [WARN] Données pluie invalides ou manquantes.")
+      rain_objs <- list(g1 = NULL, g3 = NULL, t_axis = NULL)
+    }
+    
+    message("  -> [DATA] SC + Obs")
+    cl_names <- c("nom", "numsec", "Time", "Q", "Zmoy", "Zmax", "Zmin", "Hmax", "Htot")
+    tab_sc <- read.csv(file.path(dsnlayerC, f_sc), header = FALSE, sep = "", skip = 2, col.names = cl_names)
+    tab_sc <- tab_sc %>% filter(as.numeric(Time) >= 60)
+    tab_sc[, 2:9] <- lapply(tab_sc[, 2:9], as.numeric)
+    tab_sc$DATE <- meta$date_deb + tab_sc$Time
+    tab_sc$nom <- as.character(tab_sc$nom)
+    tab_sc <- inner_join(tab_sc, sc_sf, by = c("nom" = "ID"))
+    
+    sc_names <- unique(tab_sc$NOM)
+    sc_list_obs <- list.files(path = dsnscobs, full.names = TRUE)
+    
+    load_obs <- function(suffix, col_name) {
+      files_match <- unlist(lapply(sc_names, function(x) grep(paste0(x, suffix), sc_list_obs, value = TRUE)))
+      if (length(files_match) == 0) return(NULL)
+      df_list <- lapply(files_match, read.csv)
+      df_obs <- do.call(rbind, df_list)
+      df_obs$Date <- as.POSIXct(ifelse(grepl(" ", df_obs$Date), df_obs$Date, paste(df_obs$Date, "00:00:00")), tz = "UTC")
+      df_obs <- df_obs %>% filter(Date >= min(tab_sc$DATE) & Date <= max(tab_sc$DATE))
+      if (nrow(df_obs) > 0) {
+        colnames(df_obs) <- c("Date", col_name, "NOM")
+        df_obs$NOM <- paste0(df_obs$NOM, "_obs")
+        return(df_obs)
+      }
+      return(NULL)
+    }
+    
+    obs_q <- load_obs("_Q.csv", "Q")
+    df_q_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, Q, NOM) %>% mutate(Q = abs(Q), TYPE = "solid"),
+                          if (!is.null(obs_q)) obs_q %>% mutate(Q = abs(Q), TYPE = "dashed") else NULL)
+    
+    obs_z <- load_obs("_Z.csv", "Z")
+    df_z_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, Z = Zmoy, NOM) %>% mutate(Z = ifelse(Z == 0, NA, Z), TYPE = "solid"),
+                          if (!is.null(obs_z)) obs_z %>% mutate(TYPE = "dashed") else NULL)
+    
+    obs_h <- load_obs("_H.csv", "H")
+    df_h_all <- bind_rows(tab_sc %>% dplyr::select(Date = DATE, H = Hmax, NOM) %>% mutate(TYPE = "solid"),
+                          if (!is.null(obs_h)) obs_h %>% mutate(TYPE = "dashed") else NULL)
+    
+    save_master_plot <- function(df_data, y_col, y_lab, output_path, title_suffix) {
+      if (file.exists(output_path)) return()
+      df_data <- df_data %>% filter(!is.na(Date)) %>% arrange(NOM, Date)
+      if (nrow(df_data) == 0) return()
+      
+      df_data <- df_data %>% group_by(NOM) %>%
+        filter(if(n() > 2000) row_number() %in% unique(round(seq(1, n(), length.out = 2000))) else TRUE) %>% ungroup()
+      
+      g_main <- ggplot()
+      
+      df_solid <- df_data %>% filter(TYPE == "solid")
+      if(nrow(df_solid) > 0) {
+        g_main <- g_main + geom_line(data = df_solid, aes(x = Date, y = .data[[y_col]], color = NOM), linetype = "solid", size = 0.7)
+      }
+      
+      df_dashed <- df_data %>% filter(TYPE != "solid")
+      if(nrow(df_dashed) > 0) {
+        g_main <- g_main + geom_line(data = df_dashed, aes(x = Date, y = .data[[y_col]], color = NOM), linetype = "dashed", size = 0.7)
+      }
+      
+      g_main <- g_main + theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+      
+      titre <- paste0("Hyéto + ", title_suffix, " ", racine_nom, " (Pluie sur tout le bassin)")
+      
+      plots_list <- list()
+      heights <- c()
+      rows_val <- 0
+      
+      has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+      
+      if (has_rain) {
+        plots_list[[1]] <- rain_objs$g3
+        plots_list[[2]] <- rain_objs$g1
+        plots_list[[3]] <- ggplotly(g_main)
+        heights <- c(0.1, 0.2, 0.7)
+        rows_val <- 3
+      } else {
+        plots_list[[1]] <- ggplotly(g_main)
+        heights <- c(1)
+        rows_val <- 1
+      }
+      
+      p_final <- subplot(plots_list, nrows = rows_val, shareX = TRUE, heights = heights, titleY = TRUE) %>%
+        layout(title = list(text = titre), hovermode = "closest", legend = list(title = list(text = "")))
+      saveWidget(partial_bundle(p_final), file = output_path, selfcontained = TRUE, libdir = "lib")
+    }
+    
+    message("  -> [EXPORT] HTML Q/Z/H")
+    save_master_plot(df_q_all, "Q", "Débit [m3/s]", p_q_out, "Hydrogramme")
+    save_master_plot(df_z_all, "Z", "Côte [m]", p_z_out, "Côtes")
+    save_master_plot(df_h_all, "H", "Hauteur [m]", p_h_out, "Hauteur")
+    
+    # E. Flux et Ouvrages
+    # On reconstruit le nom de sortie basé sur le fichier .sortie (sans date)
+    # Ex: C0083_..._s.cas_... -> C0083_..._s
+    name_case_clean <- sub("\\.cas_.*", "", basename(f_out_match))
+    p_qs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QS_Obs.html"))
+    p_qoh_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QOH_Obs.html"))
+    
+    if (!is.null(tab_out) && !file.exists(p_qs_out)) {
+      df_flux <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY|CULVERT"))
+      # Filtre: garde colonnes qui ont au moins une valeur non nulle
+      keep_cols <- sapply(df_flux, function(x) any(x != 0 & !is.na(x)))
+      df_flux <- df_flux[, keep_cols, drop=FALSE]
+      
+      if (ncol(df_flux) > 0) {
+        t_flux <- meta$date_deb + (tab_out[[1]] * past_ts)
+        df_long <- df_flux %>% mutate(Time = t_flux) %>% 
+          pivot_longer(-Time) %>% filter(!is.na(Time)) # On garde les 0, on filtre juste les NA temps
+        
+        # if (nrow(df_long) > 2000) {
+        #   idx_keep <- unique(round(seq(1, nrow(df_long), length.out = 2000)))
+        #   df_long <- df_long[idx_keep, ]
+        # }
+        
+        if (any(grepl("FLUX", df_long$name))) {
+          g_qs <- ggplot(df_long %>% filter(grepl("FLUX", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qs)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qs)
+            h <- c(1); r <- 1
+          }
+          p_qs <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Sorties -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qs), file = p_qs_out, selfcontained = TRUE, libdir = "lib")
+        }
+        
+        if (any(grepl("CULVERT", df_long$name)) && !file.exists(p_qoh_out)) {
+          g_qoh <- ggplot(df_long %>% filter(grepl("CULVERT", name)), aes(Time, value, color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qoh)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qoh)
+            h <- c(1); r <- 1
+          }
+          p_qoh <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Ouvrages -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qoh), file = p_qoh_out, selfcontained = TRUE, libdir = "lib")
+        }
+      }
+    }
+    
+    message("  -> [GPKG] Qmax")
+    tabmaxq <- tab_sc %>% group_by(nom) %>% filter(abs(Q) == max(abs(Q))) %>% slice(1)
+    new_sc_sf <- sc_sf %>% 
+      left_join(tabmaxq %>% dplyr::select(nom, Q, DATE, Zmoy, Hmax), by = c("ID" = "nom")) %>%
+      mutate(Q = abs(Q), NomSecteur = basename(dsnlayerC))
+    st_write(new_sc_sf, file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.gpkg")), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+    file.copy(file.path(chem_routine, "C2D", Doss_Qml, "SC_Qmax.qml"), file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.qml")), overwrite = TRUE)
+  }
+  
+  if (dir.exists(file.path(dsnlayerC, "lib"))) unlink(file.path(dsnlayerC, "lib"), recursive = TRUE)
+  message("[FIN] Terminé.")
+}
+plot_sc_obs_oh <- function() {
+  library(tidyverse)
+  library(sf)
+  library(plotly)
+  library(htmlwidgets)
+  library(tools)
+  
+  # --- 1. FONCTIONS UTILITAIRES ---
+  
+  get_rain_step <- function(filename, is_evt = TRUE) {
+    val <- as.numeric(gsub(".*[[:punct:]](\\d+)min([[:punct:]]|$).*", "\\1", filename))
+    if (is.na(val) || val == 0 || val > 1440) { 
+      parts <- strsplit(filename, "_")[[1]]
+      mins <- grep("^\\d+min$", parts, value = TRUE)
+      if (length(mins) > 0) {
+        val <- as.numeric(gsub("min", "", mins[1]))
+      } else {
+        val <- if (!is_evt || grepl("shyreg|spatial", filename, ignore.case = TRUE)) 15 else 1 
+      }
+    }
+    return(if(is.na(val) || val == 0) 1 else val)
+  }
+  
+  parse_time_meta <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    is_evt <- grepl("Evt", filename, fixed = TRUE)
+    duree <- 0
+    date_deb <- as.POSIXct("1900-01-01", tz="UTC")
+    
+    if (is_evt) {
+      if (length(parts) >= 5) {
+        suppressWarnings({
+          date_deb <- strptime(gsub("[^0-9]", "", parts[4]), format = "%Y%m%d%H%M", tz = "UTC")
+          h_m <- strsplit(parts[5], "h")[[1]]
+          if(length(h_m) >= 2) duree <- (as.numeric(h_m[1]) + as.numeric(substr(h_m[2], 1, 2)) / 60) * 3600
+        })
+      }
+    } else {
+      if (length(parts) >= 8) {
+        duree <- (as.numeric(parts[7]) + as.numeric(parts[8]) / 60) * 3600
+      }
+    }
+    list(date_deb = as.POSIXct(date_deb), duree = duree, is_evt = is_evt)
+  }
+  
+  create_regex_safe <- function(str) {
+    gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", str)
+  }
+  
+  parse_telemac_sortie <- function(file_path) {
+    message(paste("    [DEBUG]", Sys.time(), "- Lecture sortie:", basename(file_path)))
+    if (!file.exists(file_path)) return(NULL)
+    
+    past_ts <- NA
+    dir_path <- dirname(file_path)
+    base_name <- basename(file_path)
+    cas_name_candidate <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", base_name)
+    
+    if (cas_name_candidate == base_name) {
+      cas_name_candidate <- substr(base_name, 1, nchar(base_name) - 30)
+    }
+    
+    cas_files <- list.files(dir_path, pattern = paste0("^", create_regex_safe(cas_name_candidate)), full.names = TRUE)
+    cas_files <- cas_files[!grepl("\\.sortie$", cas_files)]
+    
+    if (length(cas_files) > 0) {
+      lines_cas <- readLines(cas_files[1], warn = FALSE)
+      ts_idx_cas <- grep("TIME STEP|PAS DE TEMPS", lines_cas, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx_cas)) {
+        raw_line <- lines_cas[ts_idx_cas]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .cas :", past_ts))
+      }
+    }
+    
+    lines <- readLines(file_path, warn = FALSE)
+    
+    if (is.na(past_ts)) {
+      ts_idx <- grep("TIME STEP|PAS DE TEMPS", lines, useBytes = TRUE, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx)) {
+        raw_line <- lines[ts_idx]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .sortie :", past_ts))
+      }
+    }
+    
+    if (is.na(past_ts)) {
+      message("    [WARN] TIME STEP introuvable. Valeur par défaut 1.0 utilisée.")
+      past_ts <- 1.0
+    }
+    
+    idx_interest <- grep("ITERATION|FLUX BOUNDARY|CULVERT|RUNOFF_SCS_CN|VOLUME IN THE DOMAIN|ADDITIONAL VOLUME", lines, useBytes = TRUE)
+    if (length(idx_interest) == 0) return(NULL)
+    ls <- lines[idx_interest]
+    
+    clean_numeric <- function(txt) {
+      txt <- gsub("[*]", "", txt)
+      suppressWarnings(as.numeric(txt))
+    }
+    
+    mots_cles <- tribble(
+      ~key, ~start, ~end,
+      "ITERATION ", 12, 22,
+      "RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61,
+      "VOLUME IN THE DOMAIN", 28, 44,
+      "ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61
+    )
+    
+    flux_raw <- grep("FLUX BOUNDARY", ls, value = TRUE, useBytes = TRUE)
+    flux_keys <- unique(sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", flux_raw))
+    
+    cul_raw <- grep("CULVERT", ls, value = TRUE, useBytes = TRUE)
+    culvert_keys <- unique(sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", cul_raw))
+    
+    extra <- tibble(key = c(flux_keys, culvert_keys)) %>%
+      mutate(start = if_else(grepl("CULVERT", key), 37, 25), end = if_else(grepl("CULVERT", key), 62, 42))
+    
+    all_keys <- bind_rows(mots_cles, extra)
+    ref_idx <- grep("ITERATION ", ls, useBytes = TRUE)
+    res <- matrix(NA, nrow = length(ref_idx), ncol = nrow(all_keys))
+    colnames(res) <- all_keys$key
+    
+    for (i in 1:nrow(mots_cles)) {
+      m <- grep(mots_cles$key[i], ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m) > 0) {
+        vals <- clean_numeric(substr(ls[m], mots_cles$start[i], mots_cles$end[i]))
+        indices <- findInterval(m, ref_idx)
+        valid <- indices > 0 & indices <= nrow(res)
+        res[indices[valid], mots_cles$key[i]] <- vals[valid]
+      }
+    }
+    
+    if (length(flux_keys) > 0) {
+      m_flux <- grep("FLUX BOUNDARY", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_flux) > 0) {
+        txt_flux <- ls[m_flux]
+        vals_flux <- clean_numeric(substr(txt_flux, 25, 42))
+        keys_flux <- sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", txt_flux)
+        
+        rows <- findInterval(m_flux, ref_idx)
+        cols <- match(keys_flux, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_flux[valid]
+      }
+    }
+    
+    if (length(culvert_keys) > 0) {
+      m_cul <- grep("CULVERT", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_cul) > 0) {
+        txt_cul <- ls[m_cul]
+        vals_cul <- clean_numeric(substr(txt_cul, 37, 62))
+        keys_cul <- sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", txt_cul)
+        
+        rows <- findInterval(m_cul, ref_idx)
+        cols <- match(keys_cul, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_cul[valid]
+      }
+    }
+    
+    df <- as.data.frame(res)
+    df$Past_Ts <- past_ts
+    df <- df[!is.na(df[, 1]), ] 
+    
+    message(paste("    [DEBUG] Parsing fini. Lignes:", nrow(df)))
+    gc() 
+    return(df)
+  }
+  
+  # --- 2. INITIALISATION ---
+  message(paste("[INFO]", Sys.time(), "Start plot_sc_obs_oh"))
+  sc_list <- list.files(dsnlayerC, pattern = "SC.txt")
+  list_sortie <- list.files(dsnlayerC, pattern = "s.sortie")
+  list_sortie <- list_sortie[!grepl("\\.txt$", list_sortie)]
+  
+  if (length(sc_list) == 0) return(message("Aucun SC.txt trouvé."))
+  
+  path_shp <- file.path(dsnlayerC, "SectControl_Select.shp")
+  sc_sf <- st_read(path_shp, quiet = TRUE) %>% mutate(ID = as.character(ID))
+  contour_aire <- st_read(file.path(dsnlayerC, "Step_Cartino2d_1_Contour.shp"), quiet = TRUE)
+  aire_val <- as.numeric(st_area(contour_aire))
+  dsnscobs <- file.path(dsnlayer, "_SectionsControles", contour$NOMPOST)
+  
+  cache_sortie <- list()      
+  cache_rain_plots <- list()  
+  
+  # --- 3. BOUCLE PRINCIPALE ---
+  
+  for (f_sc in sc_list) {
+    message(paste("----------------------------------------------------------------"))
+    message(paste("[STEP] Traitement :", f_sc))
+    racine <- sub("SC.txt$", "", f_sc)
+    racine_nom <- tools::file_path_sans_ext(f_sc)
+    
+    p_q_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Q_Obs.html"))
+    p_z_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Z_Obs.html"))
+    p_h_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_H_Obs.html"))
+    
+    if (file.exists(p_q_out) && file.exists(p_z_out)) {
+      message("  -> [SKIP] Fichiers existants.")
+      next
+    }
+    
+    meta <- parse_time_meta(f_sc)
+    f_out_match <- list_sortie[grep(racine, list_sortie)]
+    
+    if (length(f_out_match) == 0) {
+      message("  -> [WARN] .sortie introuvable.")
+      tab_out <- NULL
+    } else {
+      if (length(f_out_match) > 1) {
+        dates_out <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", f_out_match)
+        f_out_match <- f_out_match[which.max(as.POSIXct(dates_out, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
+      }
+      if (is.null(cache_sortie[[f_out_match]])) {
+        cache_sortie[[f_out_match]] <- parse_telemac_sortie(file.path(dsnlayerC, f_out_match))
+      }
+      tab_out <- cache_sortie[[f_out_match]]
+    }
+    
+    rain_objs <- NULL 
+    
+    if (!is.null(tab_out)) {
+      dir_pluie <- tryCatch(file.path(dsnPluie, contour$NOMPOST), error = function(e) NULL)
+      file_brute <- NA
+      
+      if (!is.null(dir_pluie) && dir.exists(dir_pluie)) {
+        all_brutes <- list.files(dir_pluie, pattern = "^(brute|shyreg|spatial)_.*\\.txt$", full.names = TRUE)
+        if (length(all_brutes) > 0) {
+          clean_sc <- sub("SC\\.txt$", "", f_sc)
+          parts_sc <- strsplit(clean_sc, "_")[[1]]
+          
+          dur_token <- grep("^\\d+min$", parts_sc, value = TRUE)
+          if(length(dur_token) == 0) dur_token <- "IGNORE_ME" else dur_token <- dur_token[1]
+          
+          evt_token <- grep("^Evts\\d+", parts_sc, value = TRUE)
+          if(length(evt_token) == 0) evt_token <- "IGNORE_ME" else evt_token <- evt_token[1]
+          
+          candidates <- all_brutes
+          if (dur_token != "IGNORE_ME") {
+            has_dur <- grepl(paste0("_", dur_token, "([_.]|$)"), basename(candidates)) | grepl(dur_token, basename(candidates), fixed = TRUE)
+            if (any(has_dur)) candidates <- candidates[has_dur]
+          }
+          if (evt_token != "IGNORE_ME") {
+            has_evt <- grepl(evt_token, basename(candidates))
+            if (any(has_evt)) candidates <- candidates[has_evt]
+          }
+          if (length(candidates) > 0) {
+            scores <- sapply(candidates, function(cand) {
+              parts_cand <- strsplit(basename(cand), "_")[[1]]
+              sum(parts_cand %in% parts_sc)
+            })
+            file_brute <- candidates[which.max(scores)]
+            message(paste("    -> [BRUTE] Trouvé:", basename(file_brute)))
+          }
+        }
+      }
+      
+      cache_key_rain <- paste0(f_out_match, ifelse(!is.na(file_brute), basename(file_brute), "NONE"))
+      
+      if (is.null(cache_rain_plots[[cache_key_rain]])) {
+        past_ts <- tab_out$Past_Ts[1]
+        if (is.na(past_ts)) past_ts <- 1.0
+        
+        if (nrow(tab_out) > 1) {
+          pas_exp <- median(diff(tab_out[[1]]), na.rm = TRUE) * past_ts
+        } else {
+          pas_exp <- past_ts
+        }
+        if (is.na(pas_exp) || pas_exp <= 0) pas_exp <- 1.0
+        message(paste("    -> [INFO] Pas d'export:", pas_exp, "s"))
+        
+        t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        
+        acc_rain <- replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0)
+        inc_rain <- c(acc_rain[1], diff(acc_rain))
+        inc_rain[inc_rain < 0] <- 0 
+        
+        df_pluie <- data.frame(
+          Time = t_axis,
+          Intensite = inc_rain * 1000 * 3600 / pas_exp, 
+          PNette = replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * 1000 * 3600 / past_ts,
+          CumulBrut = replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0) * 1000, 
+          CumulNet = cumsum(replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * pas_exp / past_ts) * 1000,
+          NomBrut = "Pluie brute", NomNet = "Pluie nette"
+        )
+        
+        if (!is.na(file_brute) && file.exists(file_brute)) {
+          tab_brute <- read.table(file_brute, header = TRUE)
+          rain_step <- get_rain_step(basename(file_brute), is_evt = meta$is_evt)
+          message(paste("    -> [BRUTE] Step:", rain_step, "min"))
+          
+          col_val <- if("Val" %in% names(tab_brute)) "Val" else names(tab_brute)[2]
+          
+          n_out <- nrow(df_pluie)
+          if (nrow(tab_brute) >= n_out) {
+            raw_vals <- tab_brute[[col_val]][1:n_out]
+          } else {
+            raw_vals <- c(tab_brute[[col_val]], rep(0, n_out - nrow(tab_brute)))
+          }
+          
+          df_pluie$CumulBrut <- cumsum(raw_vals / rain_step)
+          df_pluie$Intensite <- raw_vals * 3600 / (pas_exp * rain_step)
+        }
+        
+        df_pluie <- df_pluie %>% filter(!is.na(Time))
+        
+        if (nrow(df_pluie) > 0) {
+          df_hyeto <- df_pluie %>% dplyr::select(Time, `Pluie brute` = Intensite, `Pluie nette` = PNette) %>%
+            pivot_longer(cols = c("Pluie brute", "Pluie nette"), names_to = "Nom", values_to = "Val")
+          df_hyeto$Nom <- factor(df_hyeto$Nom, levels = c("Pluie brute", "Pluie nette"))
+          
+          cols_hyeto <- c("Pluie brute" = "#33FFFF", "Pluie nette" = "#9933FF")
+          
+          # Fix: just=1 pour aligner la barre sur la droite (fin de l'intervalle)
+          # Cela correspond visuellement à un recul d'un demi-pas si c'était centré
+          g1 <- ggplotly(ggplot(df_hyeto, aes(x = Time, y = Val, fill = Nom)) +
+                           geom_col(position = "identity", width = pas_exp, just = 1) +
+                           scale_fill_manual(name="", values = cols_hyeto) + 
+                           theme_bw() + ylab("Intensité [mm/h]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          df_cumul <- df_pluie %>% dplyr::select(Time, `Cumul brut` = CumulBrut, `Cumul net` = CumulNet) %>%
+            pivot_longer(cols = c("Cumul brut", "Cumul net"), names_to = "Nom", values_to = "Val")
+          cols_cumul <- c("Cumul brut" = "#33FFFF", "Cumul net" = "#9933FF")
+          
+          g3 <- ggplotly(ggplot(df_cumul, aes(x = Time, y = Val, color = Nom)) +
+                           geom_line(size = 1.1) +
+                           scale_color_manual(name="", values = cols_cumul) +
+                           theme_bw() + ylab("Cumul [mm]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          cache_rain_plots[[cache_key_rain]] <- list(g1 = g1, g3 = g3, t_axis = t_axis)
+        } else {
+          cache_rain_plots[[cache_key_rain]] <- NULL
+        }
+      }
+      rain_objs <- cache_rain_plots[[cache_key_rain]]
+    } else {
+      rain_objs <- NULL
+    }
+    
+    if (is.null(rain_objs)) {
+      message("    [WARN] Données pluie invalides ou manquantes.")
+      rain_objs <- list(g1 = NULL, g3 = NULL, t_axis = NULL)
+    }
+    
+    message("  -> [DATA] SC + Obs")
+    cl_names <- c("nom", "numsec", "Time", "Q", "Zmoy", "Zmax", "Zmin", "Hmax", "Htot")
+    tab_sc <- read.csv(file.path(dsnlayerC, f_sc), header = FALSE, sep = "", skip = 2, col.names = cl_names)
+    tab_sc <- tab_sc %>% filter(as.numeric(Time) >= 60)
+    tab_sc[, 2:9] <- lapply(tab_sc[, 2:9], as.numeric)
+    tab_sc$DATE <- meta$date_deb + tab_sc$Time
+    tab_sc$nom <- as.character(tab_sc$nom)
+    tab_sc <- inner_join(tab_sc, sc_sf, by = c("nom" = "ID"))
+    
+    sc_names <- unique(tab_sc$NOM)
+    sc_list_obs <- list.files(path = dsnscobs, full.names = TRUE)
+    
+    load_obs <- function(suffix, col_name) {
+      files_match <- unlist(lapply(sc_names, function(x) grep(paste0(x, suffix), sc_list_obs, value = TRUE)))
+      if (length(files_match) == 0) return(NULL)
+      df_list <- lapply(files_match, read.csv)
+      df_obs <- do.call(rbind, df_list)
+      df_obs$Date <- as.POSIXct(ifelse(grepl(" ", df_obs$Date), df_obs$Date, paste(df_obs$Date, "00:00:00")), tz = "UTC")
+      df_obs <- df_obs %>% filter(Date >= min(tab_sc$DATE) & Date <= max(tab_sc$DATE))
+      if (nrow(df_obs) > 0) {
+        colnames(df_obs) <- c("Date", col_name, "NOM")
+        df_obs$NOM <- paste0(df_obs$NOM, "_obs") 
+        df_obs$TYPE <- "dashed" 
+        return(df_obs)
+      }
+      return(NULL)
+    }
+    
+    obs_q <- load_obs("_Q.csv", "Q")
+    df_q_all <- bind_rows(
+      tab_sc %>% dplyr::select(Date = DATE, Q, NOM) %>% mutate(Q = abs(Q), TYPE = "solid"),
+      if (!is.null(obs_q)) obs_q %>% mutate(Q = abs(Q), TYPE = "dashed") else NULL
+    )
+    
+    obs_z <- load_obs("_Z.csv", "Z")
+    df_z_all <- bind_rows(
+      tab_sc %>% dplyr::select(Date = DATE, Z = Zmoy, NOM) %>% mutate(Z = ifelse(Z == 0, NA, Z), TYPE = "solid"),
+      if (!is.null(obs_z)) obs_z %>% mutate(TYPE = "dashed") else NULL
+    )
+    
+    obs_h <- load_obs("_H.csv", "H")
+    df_h_all <- bind_rows(
+      tab_sc %>% dplyr::select(Date = DATE, H = Hmax, NOM) %>% mutate(TYPE = "solid"),
+      if (!is.null(obs_h)) obs_h %>% mutate(TYPE = "dashed") else NULL
+    )
+    
+    save_master_plot <- function(df_data, y_col, y_lab, output_path, title_suffix) {
+      if (file.exists(output_path)) return()
+      df_data <- df_data %>% filter(!is.na(Date)) %>% arrange(NOM, Date)
+      if (nrow(df_data) == 0) return()
+      test_obs=df_data %>% filter(TYPE != "solid")
+      if(length(test_obs$Date )!=0){
+        g_main <- ggplot() +
+          geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                    aes(x = Date, y = .data[[y_col]], color = NOM), 
+                    linetype = "solid", size = 0.7) +
+          geom_line(data = df_data %>% filter(TYPE != "solid"), 
+                    aes(x = Date, y = .data[[y_col]], color = NOM), 
+                    linetype = "dashed", size = 0.7) +
+          theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+          theme(legend.title = element_blank())
         
       }else{
-        
-        name_split <- strsplit(SC_list[i_filesc],"_")[[1]]
-        
-        
-        DUREE=(as.numeric(substr(name_split[7],1,2))+as.numeric(substr(name_split[8],1,2))/60)*3600
-        
-        tab_sc_path <- file.path(dsnlayerC,SC_list[i_filesc])
-        tab_sc <- read.csv(file = tab_sc_path,
-                           header =FALSE,sep = "",skip = 2,col.names = cl_names 
-        )
-        # GRAVE NABIL
-        # debut_time <- which(tab_sc$Time=="60.00" | tab_sc$Time==60)
-        pasexport=60
-        pasexportstr=sprintf("%.2f", pasexport)
-        debut_time <- which(tab_sc$Time==pasexportstr | tab_sc$Time==pasexport)
-        if(min(debut_time)>1){
-          tab_sc <- tab_sc[-(1:(debut_time-1)),]
-        }
-        
-        tab_sc[,2:length(colnames(tab_sc))] <- data.frame(lapply(tab_sc,funx))[,2:length(colnames(tab_sc))]
-        
-        
-        
+        g_main <- ggplot() +
+          geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                    aes(x = Date, y = .data[[y_col]], color = NOM), 
+                    linetype = "solid", size = 0.7) +
+          theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+          theme(legend.title = element_blank())
       }
       
       
+      titre <- paste0("Hyéto + ", title_suffix, " ", racine_nom, " (Pluie sur tout le bassin)")
       
-      tabmaxq <- tab_sc %>% 
-        group_by(nom) %>% 
-        filter(abs(Q) == max(abs(min(Q)),abs(max(Q)))) %>% 
-        filter(Time == min(Time))
-      tabmaxq$nom <- as.character(tabmaxq$nom)
-      sc_sf$ID <- as.character(sc_sf$ID)
-      if("Q" %in% names(sc_sf)){
-        sc_sf <- sc_sf[,-which(names(sc_sf)=="Q")]
-      }
-      new_sc_sf <- left_join(x =sc_sf,y = tabmaxq,by=c("ID"="nom") )
-      new_sc_sf$Q <- abs(new_sc_sf$Q )
-      if(grepl("Evt", SC_list[i_filesc], fixed = TRUE)){
-        new_sc_sf$DATE <- as.character(new_sc_sf$DATE)
-      }
+      plots_list <- list()
+      heights <- c()
+      rows_val <- 0
       
-      new_sc_sf$NomSecteur=basename(dsnlayerC)
-      new_sc_sf$H_Obs=paste0(tools::file_path_sans_ext(SC_list[i_filesc]) ,"_PN_PB_H_Obs.html")
-      new_sc_sf$Q_Obs=paste0(tools::file_path_sans_ext(SC_list[i_filesc]) ,"_PN_PB_Q_Obs.html")
-      new_sc_sf$Z_Obs=paste0(tools::file_path_sans_ext(SC_list[i_filesc]) ,"_PN_PB_Z_Obs.html")
-      if("fid" %in% names(new_sc_sf)){
-        new_sc_sf <- new_sc_sf[,-which(names(new_sc_sf)=="fid")]
-      }
-      st_write(new_sc_sf,
-               dsn = file.path(dsnlayerC,paste0(tools::file_path_sans_ext(SC_list[i_filesc]) ,"_Qmax.gpkg")),driver = "GPKG",
-               delete_dsn = TRUE,delete_layer = TRUE)
+      has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
       
-      file.copy(file.path(chem_routine,"C2D",Doss_Qml,"SC_Qmax.qml"),
-                file.path(dsnlayerC,paste0(tools::file_path_sans_ext(SC_list[i_filesc]) ,"_Qmax.qml")))
-    }
-  }
-  # browser()
-  ############################ hyetogrammes et cumuls de pluie##############################
-  Listsortie=list.files(file.path(dsnlayerC),pattern="s.sortie")
-  
-  FrEng=rbind(cbind("Intensité Pluie (mm/h)","Rainfall intensity (mm/h)"),
-              cbind("Début Evènement ","Start of the event "),
-              cbind("Cumul Pluie (mm)","Rainfall accumulation"),
-              cbind("Pluie brute","Total rainfall"),
-              cbind("Pluie nette","Efficient rainfall"),
-              cbind("",""))
-  iFRENG=1
-  
-  print(Listsortie)
-  if (length(grep(Listsortie,pattern = '.txt'))>0){Listsortie=Listsortie[-grep(Listsortie,pattern = '.txt')]}
-  print(Listsortie)
-  
-  
-  if (length(Listsortie)>0)
-  { 
-    ContourAire=st_read(file.path(dsnlayerC,"Step_Cartino2d_1_Contour.shp"))
-    Aire=st_area(ContourAire)
-    units(Aire)=NULL
-    # Fonction pour extraire la racine commune 
-    
-    
-    if(length(SC_list)>0){
-      extraire_racine <- function(fichier_txt, fichiers_sortie) {
-        racine <- sub("\\SC.txt$", "", fichier_txt)
-        correspondances <- grep(racine, fichiers_sortie, value = TRUE)
-        return(correspondances)
-      }
-      # Appliquer la fonction à chaque fichier txt
-      resultat <- lapply(SC_list, extraire_racine, Listsortie)
-      
-      # Nommer les éléments de la liste pour une meilleure lisibilité
-      names(resultat) <- SC_list
-    }else{
-      
-      resultat=Listsortie
-    }
-    
-    
-    
-    
-    # Pour chaque fichier txt, si plusieurs fichiers de sortie correspondent, ne garder que le plus récent
-    resultat_final <- lapply(resultat, function(x) {
-      if (length(x) > 1) {
-        dates <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", x)
-        x[which.max(as.POSIXct(dates, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
+      if (has_rain) {
+        plots_list[[1]] <- rain_objs$g3
+        plots_list[[2]] <- rain_objs$g1
+        plots_list[[3]] <- ggplotly(g_main, dynamicTicks = TRUE)
+        heights <- c(0.1, 0.2, 0.7)
+        rows_val <- 3
       } else {
-        x
+        plots_list[[1]] <- ggplotly(g_main, dynamicTicks = TRUE)
+        heights <- c(1)
+        rows_val <- 1
       }
-    })
-    Listsortie <- resultat_final
-    
-    
-    
-    for (ils in 1:length(Listsortie)){
-      nomsortie=Listsortie[ils]
-      print(nomsortie)
       
-      substr(nomsortie,1,nchar(nomsortie)-30)
+      p_final <- subplot(plots_list, nrows = rows_val, shareX = TRUE, heights = heights, titleY = TRUE) %>%
+        layout(title = list(text = titre), hovermode = "closest", legend = list(title = list(text = "")))
+      saveWidget(partial_bundle(p_final), file = output_path, selfcontained = TRUE, libdir = "lib")
+    }
+    
+    message("  -> [EXPORT] HTML Q/Z/H")
+    save_master_plot(df_q_all, "Q", "Débit [m3/s]", p_q_out, "Hydrogramme")
+    save_master_plot(df_z_all, "Z", "Côte [m]", p_z_out, "Côtes")
+    save_master_plot(df_h_all, "H", "Hauteur [m]", p_h_out, "Hauteur")
+    
+    # E. Flux et Ouvrages
+    name_case_clean <- sub("\\.cas_.*", "", basename(f_out_match))
+    p_qs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QS_Obs.html"))
+    p_qoh_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QOH_Obs.html"))
+    p_vqs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_VQS_Obs.html"))
+    
+    if (!is.null(tab_out)) {
+      # 1. Ajout VQS (Volume)
+      if (!file.exists(p_vqs_out)) {
+        if (!exists("t_axis")) t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        vol_domaine <- replace_na(tab_out[["VOLUME IN THE DOMAIN"]], 0)
+        vol_domaine <- vol_domaine - vol_domaine[1]
+        
+        vol_injecte <- cumsum(replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0)) 
+        
+        df_flux_only <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY"))
+        vol_sorties_cumul <- rep(0, nrow(tab_out))
+        if (ncol(df_flux_only) > 0) {
+          # FIX: On garde toutes les colonnes, et on nettoie les NA
+          df_flux_active <- df_flux_only %>% mutate(across(everything(), ~replace_na(., 0)))
+          q_total <- rowSums(df_flux_active, na.rm=TRUE)
+          vol_sorties_cumul <- cumsum(-q_total * pas_exp)
+        }
+        
+        df_vol <- data.frame(
+          Time = t_axis,
+          Injecte = vol_injecte,
+          Domaine = vol_domaine,
+          `Domaine + Sorties` = vol_domaine + vol_sorties_cumul,
+          check.names = FALSE
+        ) %>% pivot_longer(-Time, names_to = "Variable", values_to = "Volume")
+        
+        # Ajout des volumes individuels des sorties (FIX: df_flux_active existe maintenant toujours)
+        if (exists("df_flux_active") && ncol(df_flux_active) > 0) {
+          for(col_name in colnames(df_flux_active)) {
+            clean_name <- sub("FLUX BOUNDARY", "Sortie", col_name)
+            vol_indiv <- cumsum(-df_flux_active[[col_name]] * pas_exp)
+            df_temp <- data.frame(Time = t_axis, Variable = clean_name, Volume = vol_indiv)
+            df_vol <- bind_rows(df_vol, df_temp)
+          }
+        }
+        
+        g_vol <- ggplot(df_vol, aes(x = Time, y = Volume, color = Variable)) +
+          geom_line() + theme_bw() + labs(y = "Volume [m3]") + 
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        df_qs_total <- data.frame(Time = t_axis, Q = if(exists("q_total")) -q_total else 0)
+        g_qs_total <- ggplot(df_qs_total, aes(x=Time, y=Q, color="Débit Sortie Total")) + 
+          geom_line() + 
+          scale_color_manual(values=c("Débit Sortie Total"="red")) +
+          theme_bw() + ylab("Débit Sortie Total [m3/s]") +
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        plots_vqs <- list()
+        if (!is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")) {
+          plots_vqs <- list(rain_objs$g3, ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 3, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        } else {
+          plots_vqs <- list(ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        }
+        saveWidget(partial_bundle(p_vqs), file = p_vqs_out, selfcontained = TRUE, libdir = "lib")
+      }
       
+      df_flux <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY|CULVERT"))
+      keep_cols <- sapply(df_flux, function(x) !all(is.na(x)))
+      df_flux <- df_flux[, keep_cols, drop=FALSE]
       
-      if (file.exists(file.path(dsnlayerC,substr(nomsortie,1,nchar(nomsortie)-30)))==T)
-      {
-        Lignes=readLines(con=file.path(dsnlayerC,substr(nomsortie,1,nchar(nomsortie)-30)))
+      if (ncol(df_flux) > 0) {
+        if (!exists("t_axis")) t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        df_long <- df_flux %>% mutate(Time = t_axis) %>% 
+          pivot_longer(-Time) %>% filter(!is.na(Time)) 
         
-        RecupTps=rbind("TIME STEP ")
-        indic=regexpr(RecupTps[1,1],as.character(Lignes))
-        Past_Ts=as.numeric(substr(Lignes[which(indic>-1)],38,nchar(Lignes[which(indic>-1)])))
-        
-        Lignes=readLines(con=file.path(dsnlayerC,nomsortie))
-        MotsCles=rbind(cbind("ITERATION ",12,22),
-                       cbind("RUNOFF_SCS_CN : ACCUMULATED RAINFALL",44,61),
-                       cbind("VOLUME IN THE DOMAIN",28,44),
-                       cbind("ADDITIONAL VOLUME DUE TO SOURCE TERMS",44,61),
-                       cbind("RELATIVE ERROR IN VOLUME AT T",58,75))
-        
-        
-        
-        
-        for (ic in 1:dim(MotsCles)[1]){
-          # print(MotsCles[ic,1])
-          indic=regexpr(MotsCles[ic,1],as.character(Lignes))
-          correspond=which(indic>-1)
-          # Ajout car j ai ecrit dans buse.f plusieurs fois culvert...
-          correspond=correspond[which(is.na(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))==F)]
+        if (!file.exists(p_qs_out) && any(grepl("FLUX", df_long$name))) {
+          g_qs <- ggplot(df_long %>% filter(grepl("FLUX", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
           
-          if (ic==1)
-          {
-            correspond <- correspond[-1]
-            niter=length(correspond)
-            tab=matrix(0,niter,dim(MotsCles))
-            referenceT=correspond
-            tab[,1]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))
-          }else{
-            if (length(correspond)>0)
-            {
-              if(length(correspond)==length(referenceT)){
-                tab[,ic]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3]))) 
-                
-              }else{
-                bonindice=sapply(1:length(correspond), function(x) {which(referenceT>=correspond[x])[1]})
-                if(!is_empty(which(is.na(bonindice))) ){
-                  correspond=correspond[-which(is.na(bonindice))]
-                  bonindice=bonindice[-which(is.na(bonindice))]
-                  
-                }
-                tab[na.omit(bonindice),ic]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3]))) 
-              }
-            }
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
           }
-          
-        }
-        pasexport=(tab[2,1]-tab[1,1])*Past_Ts
-        names(pasexport)=NULL
-        minute=tab[1,1]/60
-        tab[,1]=tab[,1]/minute
-        colnames(tab)=MotsCles[,1]
-        write.table(tab,
-                    file=file.path(dsnlayerC,paste0(substr(nomsortie,1,nchar(nomsortie)-7),"_sortie.txt")),
-                    sep=";")
-        
-        
-        if (gregexpr("Evt",nomsortie)[[1]][1]>0){
-          
-          
-          name_split <- strsplit(nomsortie[[1]],"_")[[1]]
-          
-          
-          date_deb <- gsub('[^0-9]','',name_split[4])
-          date_deb <- strptime(x = date_deb,format = "%Y%m%d%H%M" )
-          
-          
-          TextAbsc=paste0(FrEng[2,iFRENG],date_deb," TU")
-        }else{
-          date_deb <- "190001010000"
-          date_deb <- strptime(x = date_deb,format = "%Y%m%d%H%M" )
+          p_qs <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Sorties -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qs), file = p_qs_out, selfcontained = TRUE, libdir = "lib")
         }
         
-        #Calcul pluie brute nette volume brut net
-        #Pluie Brute
-        XPluieBrut=c(0,tab[,1],(max(tab[,1])+pasexport))+date_deb
-        PluieBrut=0*tab[,2] 
-        PluieBrut[1]=tab[1,2]
-        PluieBrut[-1]=tab[-1,2]-tab[-dim(tab)[1],2]
-        PluieBrut=c(0,1000*PluieBrut*3600/(pasexport),0)
-        
-        # Pluie Nette
-        PluieNette=c(0,1000*tab[,4]/Aire*3600/Past_Ts,0)
-        
-        #Volume nette
-        Vnet=1000*sapply(1:dim(tab)[1], function(x) {sum(tab[1:x,4]/Aire*pasexport/Past_Ts)})
-        Vnet=c(NA,Vnet,NA)
-        Vbrut = c(NA,tab[,2]*1000,NA)
-        
-        
-        maxpn <- round(max(Vnet,na.rm = TRUE))
-        maxpb <- round(max(Vbrut,na.rm = TRUE))
-        
-        
-        # browser()
-        nomhyeto_cumul=file.path(dsnlayerC,paste0(substr(nomsortie,1,nchar(nomsortie)-34),"hyeto_cumul.csv"))
-        format(XPluieBrut,format="%Y/%m/%d %H:%M:%S")
-        tabexp_=cbind( format(XPluieBrut,format="%Y/%m/%d %H:%M:%S"),PluieBrut,PluieNette,Vbrut,Vnet)
-        colnames=cbind("XPluieBrut","PluieBrut","PluieNette","Vbrut","Vnet")
-        write.csv(tabexp_,file=nomhyeto_cumul)
-        # if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp")))
-        
-        
-        ############## resultat nabil
-        if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-          sc_sf <- st_read(file.path(dsnlayerC,"SectControl_Select.shp"))
+        if (!file.exists(p_qoh_out) && any(grepl("CULVERT", df_long$name))) {
+          g_qoh <- ggplot(df_long %>% filter(grepl("CULVERT", name)), aes(Time, value, color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
           
-          SC_list <- list.files(dsnlayerC,pattern = "SC.txt")
-          
-          cl_names <- c("nom","numsec","Time","Q","Zmoy","Zmax","Zmin","Hmax","Htot")
-          
-          funx <- function(x){
-            as.numeric(x)
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
           }
+          p_qoh <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Ouvrages -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qoh), file = p_qoh_out, selfcontained = TRUE, libdir = "lib")
         }
-        
-        i_filesc=ils
-        
-        
-        
-        file.path(dsnPluie,contour$NOMPOST)
-        
-        pattern_pluie <- strsplit(SC_list[i_filesc],split = "SC")[[1]][1]
-        # list.files(file.path(dsnPluie,contour$NOMPOST),pattern = "f")
-        if(grepl("Evt", SC_list[i_filesc], fixed = TRUE)){
-          
-          name_case_split <- strsplit(paste0("brute_",SC_list[i_filesc]),"_")[[1]]
-          name_case <- do.call(paste, c(as.list(name_case_split[1:6]), sep = "_"))
-          chem_pluie <- file.path(dsnPluie,contour$NOMPOST)
-          file_brute <- list.files(chem_pluie,pattern = name_case,full.names = T)
-          file_brute <- file_brute[1]
-          if(!is.na(file_brute)){
-            tab_brute <- read.table(file_brute,header = TRUE)
-            cumul_brute <- tab_brute/15
-            cumul_brute_ <- cumul_brute
-            for (ibrut in 2:length(cumul_brute$Time)) {
-              if(ibrut==2){
-                cumul_brute$Val[ibrut]=cumul_brute_$Val[ibrut]+cumul_brute_$Val[ibrut-1]
-              }else{
-                cumul_brute$Val[ibrut]=cumul_brute_$Val[ibrut]+sum(cumul_brute_$Val[1:(ibrut-1)])
-              }
-              
-              
-              
-            }
-          }
-          
-          name_split <- strsplit(SC_list[i_filesc],"_")[[1]]
-          name_case_split_ <- strsplit(SC_list[i_filesc],"_")[[1]]
-          name_case_ <- do.call(paste, c(as.list(name_case_split_[1:6]), sep = "_"))
-          splt_h <- strsplit(name_split[5],"h")[[1]]
-          DUREE=as.numeric(splt_h[1])+as.numeric(substr(splt_h[2],1,2))/60
-          # DUREE=(as.numeric(substr(name_split[5],1,2))+as.numeric(substr(name_split[5],4,5))/60)*3600
-          
-          datedebut <- gsub('[^0-9]','',name_split[4])
-          datedebut <- strptime(x = datedebut,format = "%Y%m%d%H%M" )
-          
-          
-          tab_sc_path <- file.path(dsnlayerC,SC_list[i_filesc])
-          tab_sc <- read.csv(file = tab_sc_path,
-                             header =FALSE,sep = "",skip = 2,col.names = cl_names 
-          )
-          # GRAVE NABIL
-          # debut_time <- which(tab_sc$Time=="60.00" | tab_sc$Time==60)
-          # chaine_formatee <- sprintf("%.2f", pasexport)
-          pasexportstr=sprintf("%.2f", pasexport)
-          debut_time <- which(tab_sc$Time==pasexportstr | tab_sc$Time==pasexport)
-          if(min(debut_time)>1){
-            tab_sc <- tab_sc[-(1:(debut_time-1)),]
-          }
-          
-          ######################################  
-          ###############################################################################
-          #{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
-          tabexp_=cbind( format(XPluieBrut,format="%Y/%m/%d %H:%M:%S"),PluieBrut,PluieNette,Vbrut,Vnet)
-          tab_sc[,2:length(colnames(tab_sc))] <- data.frame(lapply(tab_sc,funx))[,2:length(colnames(tab_sc))]
-          tab_sc$DATE <- datedebut+as.numeric(tab_sc$Time)
-          tab_sc$nom <- as.character(tab_sc$nom)
-          sc_sf$ID <- as.character(sc_sf$ID)
-          tab_sc <- inner_join(tab_sc,sc_sf,by = c("nom"="ID"))
-          sc_names <- unique(tab_sc$NOM)
-          sc_list_obs <- list.files(path = dsnscobs,full.names = T)
-          sc_list_match <- unlist(lapply(sc_names, function(x) grep(x, sc_list_obs, value = TRUE)))
-          if(length(sc_list_match)>0){
-            sc_list_match_Q <- unlist(lapply("_Q.csv", function(x) grep(x, sc_list_match, value = TRUE)))
-            sc_list_match_Z <- unlist(lapply("_Z.csv", function(x) grep(x, sc_list_match, value = TRUE)))
-            sc_list_match_H <- unlist(lapply("_H.csv", function(x) grep(x, sc_list_match, value = TRUE)))
-            
-            myfiles = lapply(sc_list_match_Q, read.csv)
-            myfilesZ = lapply(sc_list_match_Z, read.csv)
-            myfilesH = lapply(sc_list_match_H, read.csv)
-          }
-          
-          
-          tabexp_df <- as.data.frame(tabexp_)
-          colnames(tabexp_df) <- colnames
-          
-          tab_pb <- data.frame(Time = as.POSIXct(tabexp_df$XPluieBrut),
-                               Val = abs(round(as.numeric(tabexp_df$PluieBrut),1)),
-                               Nom = "Pluie brute")
-          tab_pb <- tab_pb[-c(1,length(tab_pb$Time)),]
-          tab_pn <- data.frame(Time = as.POSIXct(tabexp_df$XPluieBrut),
-                               Val = abs(round(as.numeric(tabexp_df$PluieNette),1)),
-                               Nom = "Pluie nette")
-          tab_pn <- tab_pn[-c(1,2),]
-          tab_vb <- data.frame(Time=as.POSIXct(tabexp_df$XPluieBrut) ,
-                               Val=round(as.numeric(tabexp_df$Vbrut,1)),
-                               Nom="Cumul brut")
-          
-          if(!is.na(file_brute)){
-            tab_vb <- na.omit(tab_vb)
-            tab_vb$Val <-  cumul_brute$Val[1:length(tab_vb$Val)]
-          }
-          tab_vn <- data.frame(Time=as.POSIXct(tabexp_df$XPluieBrut),
-                               Val=round(as.numeric(tabexp_df$Vnet,1)) ,
-                               Nom="Cumul net")
-          
-          tab_all_cumul <- rbind.data.frame(na.omit(tab_vb),na.omit(tab_vn))
-          
-          
-          
-          
-          pt_pluie <- as.numeric(gsub("\\D", "", name_split[10]))
-          if(!is.na(file_brute)){
-            # tab_all_cumul$Val <-  cumul_brute$Val
-            tab_pb$Val <- tab_brute$Val[1:length(tab_pb$Val)]*3600/((pasexport)*pt_pluie)
-          }
-          
-          tab_pn$Time <- tab_pb$Time
-          tab_pluieall <- rbind.data.frame(tab_pb,tab_pn)
-          lim_inf <- max(min(as.POSIXct(tab_sc$DATE),na.rm = T),min(as.POSIXct(tab_pluieall$Time),na.rm = T))
-          lim_sup <- min(max(as.POSIXct(tab_sc$DATE),na.rm = T),max(as.POSIXct(tab_pluieall$Time),na.rm = T))
-          if(length(sc_list_match)>0){
-            mydf <- do.call(rbind.data.frame,myfiles )
-            ajouter_heure_si_manquante <- function(date_str) {
-              if (grepl(" ", date_str)) { # Vérifie si un espace est présent (indiquant potentiellement une heure)
-                return(date_str) # L'heure est probablement déjà là
-              } else {
-                return(paste0(date_str, " 00:00:00")) # Ajoute l'heure de minuit
-              }
-            }
-            # dates_texte_modifiees <- unname(sapply(mydf$Date, ajouter_heure_si_manquante))
-            mydf$Date <- as.POSIXct(unname(sapply(mydf$Date, ajouter_heure_si_manquante)),tz="UTC",format="%Y-%m-%d %H:%M:%S")
-            # name_split
-            # mydf$Date <- as.POSIXct(mydf$Date,tz="UTC")
-            mydf_select <- mydf %>% 
-              filter(Date >= as.POSIXct(lim_inf) & Date < as.POSIXct(lim_sup) )
-            tab_sc_csel <- data.frame(Date=tab_sc$DATE,
-                                      Q=tab_sc$Q,
-                                      NOM=tab_sc$NOM)
-            if(nrow(mydf_select)!=0){
-              names(mydf_select)=c("Date","Q","NOM")
-            }
-            
-            tab_sc_all <- rbind.data.frame(tab_sc_csel,mydf_select)
-            tab_sc_all$Date <- as.POSIXct(tab_sc_all$Date)
-            tab_sc_all$Q <- abs(tab_sc_all$Q)
-            
-            
-            mydfZ <- do.call(rbind.data.frame,myfilesZ )
-            ajouter_heure_si_manquante <- function(date_str) {
-              if (grepl(" ", date_str)) { # Vérifie si un espace est présent (indiquant potentiellement une heure)
-                return(date_str) # L'heure est probablement déjà là
-              } else {
-                return(paste0(date_str, " 00:00:00")) # Ajoute l'heure de minuit
-              }
-            }
-            # dates_texte_modifiees <- unname(sapply(mydf$Date, ajouter_heure_si_manquante))
-            if(!is_empty(mydfZ)){
-              mydfZ$Date <- as.POSIXct(unname(sapply(mydfZ$Date, ajouter_heure_si_manquante)),tz="UTC",format="%Y-%m-%d %H:%M:%S")
-              
-            }else{
-              mydfZ$Date <- as.POSIXct(mydfZ$Date,tz="UTC")
-            }
-            # name_split
-            # mydfZ$Date <- as.POSIXct(mydfZ$Date,tz="UTC")
-            mydfZ_select <- mydfZ %>% 
-              filter(Date >= as.POSIXct(lim_inf) & Date < as.POSIXct(lim_sup) )
-            
-            ajouter_heure_si_manquante <- function(date_str) {
-              if (grepl(" ", date_str)) { # Vérifie si un espace est présent (indiquant potentiellement une heure)
-                return(date_str) # L'heure est probablement déjà là
-              } else {
-                return(paste0(date_str, " 00:00:00")) # Ajoute l'heure de minuit
-              }
-            }
-            # dates_texte_modifiees <- unname(sapply(mydf$Date, ajouter_heure_si_manquante))
-            mydf$Date <- as.POSIXct(unname(sapply(mydf$Date, ajouter_heure_si_manquante)),tz="UTC",format="%Y-%m-%d %H:%M:%S")
-            name_split
-            
-            mydfH <- do.call(rbind.data.frame,myfilesH )
-            mydfH$Date <- as.POSIXct(unname(sapply(mydfH$Date, ajouter_heure_si_manquante)),tz="UTC",format="%Y-%m-%d %H:%M:%S")
-            
-            # mydfH$Date <- as.POSIXct(mydfH$Date,tz="UTC")
-            mydfH_select <- mydfH %>% 
-              filter(Date >= as.POSIXct(lim_inf) & Date < as.POSIXct(lim_sup) )
-            tab_sc_cselZ <- data.frame(Date=tab_sc$DATE,
-                                       Z=tab_sc$Zmoy,
-                                       NOM=tab_sc$NOM)
-            tab_sc_cselZ$Z[which(tab_sc_cselZ$Z==0)] <- NA
-            if(nrow(mydfZ_select)!=0){
-              names(mydfZ_select)=c("Date","Z","NOM")
-            }
-            tab_sc_allZ <- rbind.data.frame(tab_sc_cselZ,mydfZ_select)
-            tab_sc_allZ$Date <- as.POSIXct(tab_sc_allZ$Date)
-            
-            
-            tab_sc_cselH <- data.frame(Date=tab_sc$DATE,
-                                       H=tab_sc$Hmax,
-                                       NOM=tab_sc$NOM)
-            # tab_sc_cselH$H[which(tab_sc_cselH$H==0)] <- NA
-            if(nrow(mydfH_select)!=0){
-              names(mydfH_select)=c("Date","H","NOM")
-            }
-            tab_sc_allH <- rbind.data.frame(tab_sc_cselH,mydfH_select)
-            tab_sc_allH$Date <- as.POSIXct(tab_sc_allH$Date)
-            
-            
-          }else{
-            tab_sc_all <- tab_sc
-            tab_sc_all$Date <- tab_sc_all$DATE
-            tab_sc_all$Q <- abs(tab_sc_all$Q)
-            tab_sc_allZ <- tab_sc
-            tab_sc_allZ$Date <- tab_sc_allZ$DATE
-            tab_sc_allZ$Z <- tab_sc$Zmoy
-            tab_sc_allZ$Z[which(tab_sc_allZ$Z==0)] <- NA
-            tab_sc_allH <- tab_sc
-            tab_sc_allH$Date <- tab_sc_allH$DATE
-            tab_sc_allH$H <- tab_sc$Hmax
-          }
-          g1 <- ggplot(tab_pluieall, aes(Time , Val,fill = Nom)) +
-            geom_col(position = 'identity',width = 10) +
-            scale_fill_manual(values=c( 
-              "#33FFFF", 
-              "#9933FF")) +
-            theme_bw() +
-            ylab("Intentisté [mm/h]") +
-            scale_x_datetime(#date_breaks = "day",
-              limits = c(lim_inf, 
-                         lim_sup),
-              expand = c(0,0))+
-            theme(axis.title.x    = element_blank(),
-                  axis.text.x     = element_blank(),
-                  axis.ticks.x    = element_blank(),
-                  axis.title.y=element_text(vjust = 2),
-                  legend.title = element_blank(),
-                  legend.key.size = unit(0.4,"cm") ,
-                  legend.text = element_text(size = 10),
-                  legend.position = "right")
-          
-          g3 <- ggplot(tab_all_cumul, aes(Time  ,Val)) +
-            geom_line(aes(color = Nom),size=1.1) +
-            scale_color_manual(values=c( 
-              "#33FFFF", 
-              "#9933FF")) +
-            theme_bw() +
-            ylab("Cumul [mm]") +
-            scale_x_datetime(#date_breaks = "day",
-              limits = c(lim_inf, 
-                         lim_sup),
-              expand = c(0,0))+
-            theme(axis.title.x    = element_blank(),
-                  axis.text.x     = element_blank(),
-                  axis.ticks.x    = element_blank(),
-                  axis.title.y=element_text(vjust = 2),
-                  legend.title = element_blank(),
-                  legend.key.size = unit(0.4,"cm") ,
-                  legend.text = element_text(size = 10),
-                  legend.position = "right")
-          # tab_sc$Q <- abs(tab_sc$Q)
-          tab_sc_all$TYPE <- "solid"
-          tab_sc_all$TYPE[grepl("_obs", tab_sc_all$NOM)]="dashed"
-          df_sans_na <- tab_sc_all %>%
-            dplyr::distinct(NOM,.keep_all = TRUE) 
-          
-          
-          df_sans_na <- df_sans_na[order(df_sans_na$NOM), ]
-          g2 <- ggplot(data =tab_sc_all,aes(x = Date, y=Q))+
-            geom_line(aes(color = NOM),size=0.7,linetype = tab_sc_all$TYPE) +
-            scale_linetype_manual(values=df_sans_na$TYPE,guide = "none")+
-            ylab("Débit [m3/s]") +
-            xlab("Date (heure météo)")+
-            scale_x_datetime(#date_breaks = "day",
-              limits = c(lim_inf, 
-                         lim_sup),
-              expand = c(0,0))+
-            theme_bw() +
-            theme(                    
-              legend.title = element_blank(),
-              legend.key.size = unit(0.4,"cm") ,
-              legend.text = element_text(size = 10),
-              legend.position = "right")
-          
-          tab_sc_allZ$TYPE <- "solid"
-          tab_sc_allZ$TYPE[grepl("_obs", tab_sc_allZ$NOM)]="dashed"
-          
-          df_sans_naz <- tab_sc_allZ %>%
-            dplyr::distinct(NOM,.keep_all = TRUE) 
-          
-          
-          df_sans_naz <- df_sans_naz[order(df_sans_naz$NOM), ]
-          
-          
-          g4 <- ggplot(data =tab_sc_allZ,aes(x = Date, y=Z,linetype = NOM))+
-            geom_line(aes(color = NOM),size=0.7) +
-            scale_linetype_manual(values=df_sans_naz$TYPE,guide = "none")+
-            # scale_color_manual(sample(colors(), 38))+
-            ylab("Côte [m]") +
-            xlab("Date (heure météo)")+
-            scale_x_datetime(#date_breaks = "day",
-              limits = c(lim_inf, 
-                         lim_sup),
-              expand = c(0,0))+
-            theme_bw() +
-            theme(                    
-              legend.title = element_blank(),
-              legend.key.size = unit(0.4,"cm") ,
-              legend.text = element_text(size = 10),
-              legend.position = "right")
-          
-          tab_sc_allH$TYPE <- "solid"
-          tab_sc_allH$TYPE[grepl("_obs", tab_sc_allH$NOM)]="longdash"
-          
-          df_sans_nah <- tab_sc_all %>%
-            dplyr::distinct(NOM,.keep_all = TRUE) 
-          
-          
-          df_sans_nah <- df_sans_nah[order(df_sans_nah$NOM), ]
-          g5 <- ggplot(data =tab_sc_allH,aes(x = Date, y=H))+
-            geom_line(aes(color = NOM),size=0.7,linetype = tab_sc_allH$TYPE) +
-            scale_linetype_manual(values=df_sans_nah$TYPE,guide = "none")+
-            ylab("Hauteur [m]") +
-            xlab("Date (heure météo)")+
-            scale_x_datetime(#date_breaks = "day",
-              limits = c(lim_inf, 
-                         lim_sup),
-              expand = c(0,0))+
-            theme_bw() +
-            theme(                    
-              legend.title = element_blank(),
-              legend.key.size = unit(0.4,"cm") ,
-              legend.text = element_text(size = 10),
-              legend.position = "right")
-          
-          
-          fig1 <- plotly::ggplotly(g1,dynamicTicks = T) 
-          fig2 <- plotly::ggplotly(g2,dynamicTicks = T)
-          fig3 <- plotly::ggplotly(g3,dynamicTicks = T)
-          fig4 <- plotly::ggplotly(g4,dynamicTicks = T)
-          fig5 <- plotly::ggplotly(g5,dynamicTicks = T)
-          fig <- plotly::subplot(fig3,fig1, fig2, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-            plotly::layout(title = list(text = paste0("Hyéto + Hydrogramme ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                           plot_bgcolor='#e5ecf6',
-                           xaxis = list(
-                             zerolinecolor = '#ffff',
-                             zerolinewidth = 2,
-                             gridcolor = 'ffff'       #☻ type = 'date'
-                             # tickformat = "%d %B (%a)<br>%Y"
-                           ),
-                           yaxis = list(
-                             zerolinecolor = '#ffff',
-                             zerolinewidth = 2,
-                             gridcolor = 'ffff'))
-          
-          figz <- plotly::subplot(fig3,fig1, fig4, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-            plotly::layout(title = list(text = paste0("Hyéto + Côtes ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                           plot_bgcolor='#e5ecf6',
-                           xaxis = list(
-                             zerolinecolor = '#ffff',
-                             zerolinewidth = 2,
-                             gridcolor = 'ffff'       #☻ type = 'date'
-                             # tickformat = "%d %B (%a)<br>%Y"
-                           ),
-                           yaxis = list(
-                             zerolinecolor = '#ffff',
-                             zerolinewidth = 2,
-                             gridcolor = 'ffff'))
-          
-          
-          figh <- plotly::subplot(fig3,fig1, fig5, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-            plotly::layout(title = list(text = paste0("Hyéto + Hauteur ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                           plot_bgcolor='#e5ecf6',
-                           xaxis = list(
-                             zerolinecolor = '#ffff',
-                             zerolinewidth = 2,
-                             gridcolor = 'ffff'       #☻ type = 'date'
-                             # tickformat = "%d %B (%a)<br>%Y"
-                           ),
-                           yaxis = list(
-                             zerolinecolor = '#ffff',
-                             zerolinewidth = 2,
-                             gridcolor = 'ffff'))
-          
-          
-          # 
-          # nomsortie=Listsortie[ils]
-          # print(nomsortie)
-          # 
-          # substr(nomsortie,1,nchar(nomsortie)-30)
-          
-          Lignes=readLines(con=file.path(dsnlayerC,substr(nomsortie,1,nchar(nomsortie)-30)))
-          
-          RecupTps=rbind("TIME STEP ")
-          indic=regexpr(RecupTps[1,1],as.character(Lignes))
-          Past_Ts=as.numeric(substr(Lignes[which(indic>-1)],38,nchar(Lignes[which(indic>-1)])))
-          # browser()
-          Lignes=readLines(con=file.path(dsnlayerC,nomsortie))
-          # Mots-clés généraux
-          MotsCles <- rbind(
-            cbind("RELATIVE ERROR IN VOLUME AT T", 37, 54),
-            cbind("RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61),
-            cbind("VOLUME IN THE DOMAIN", 28, 44),
-            cbind("ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61),
-            cbind("RELATIVE ERROR IN VOLUME AT T", 58, 75),
-            cbind(paste0("FLUX BOUNDARY    ", 1:9), 25, 42),
-            cbind(paste0("FLUX BOUNDARY    ", 10:30), 25, 42),
-            cbind(paste0("CULVERT            ", 1:9, "  DIS"),37,62),
-            cbind(paste0("CULVERT           ", 10:99, "  DIS"),37,62)
-          )
-          
-          
-          
-          PosFB=grep(MotsCles,pattern="FLUX BOUNDARY")
-          PosCu=grep(MotsCles,pattern="CULVERT")
-          PosCuL=PosCu[length(PosCu)/2+(1:(length(PosCu)/2))]
-          PosCu=PosCu[1:(length(PosCu)/2)]
-          
-          # MotsCles=rbind(cbind("RELATIVE ERROR IN VOLUME AT T",37,54),
-          #                cbind("RUNOFF_SCS_CN : ACCUMULATED RAINFALL",44,61),
-          #                cbind("VOLUME IN THE DOMAIN",28,44),
-          #                cbind("FLUX BOUNDARY    1",25,42),
-          #                cbind("RELATIVE ERROR IN VOLUME AT T",58,75))
-          #
-          # FLUX BOUNDARY    1:    -0.000000     M3/S  ( >0 : ENTERING  <0 : EXITING )
-          # FLUX BOUNDARY    2:
-          
-          for (ic in 1:dim(MotsCles)[1]){
-            # print(MotsCles[ic,1])
-            indic=regexpr(MotsCles[ic,1],as.character(Lignes))
-            correspond=which(indic>-1)
-            # Ajout car j ai ecrit dans buse.f plusieurs fois culvert...
-            correspond=correspond[which(is.na(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))==F)]
-            
-            if (ic==1)
-            {
-              niter=length(correspond)
-              tab=matrix(0,niter,dim(MotsCles))
-              referenceT=correspond
-              tab[,1]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))
-            }else{
-              if (length(correspond)>0)
-              {
-                
-                # IL Y A UN BUG ((niter-length(correspond)+1):niter)
-                # (niter-length(correspond)+1)
-                # bonindice=((niter-length(correspond)+1):niter)
-                
-                bonindice=sapply(1:length(correspond), function(x) {which(referenceT>=correspond[x])[1]})
-                # tab[do.call(rbind,bonindice),ic]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))
-                tab[bonindice,ic]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))   
-              }
-            }
-            
-          }
-          
-          colnames(tab)=MotsCles[,1]
-          # ... (previous code remains the same until the plotting section) ...
-          flux_cols_to_keep <- sapply(grep("FLUX BOUNDARY", colnames(tab), value = TRUE), function(col) {
-            any(tab[, col] != 0, na.rm = TRUE)
-          })
-          
-          # Identify Culvert columns (DIS) with at least one value > 0
-          culvert_cols_to_keep <- sapply(grep("CULVERT", colnames(tab), value = TRUE), function(col) {
-            any(tab[, col] != 0, na.rm = TRUE)
-          })
-          
-          tab <- tab[, c(TRUE, rep(TRUE, 4), flux_cols_to_keep, culvert_cols_to_keep)]  # Keep first 5 cols + selected
-          
-          write.table(tab,
-                      file=file.path(dsnlayerC,paste0(substr(nomsortie,1,nchar(nomsortie)-7),"_sortie.txt")),
-                      sep=";")
-          
-          
-          
-          # Suppression du volume initial (confition limite)
-          if (length(tab)>2){ # Corrected condition: Check for more than one row
-            tab[, 3] = tab[, 3] - tab[1, 3]  # Subtract initial volume
-            TimeStep = tab[1, 1]  # Get the time step
-            CumulDebit = matrix(0, nrow(tab), 10) #nrow instead of dim
-            # ...
-            tab[, 4] = tab[, 4] / Past_Ts  # Calculate volume per time step
-            CumulAddVol = sapply(1:nrow(tab), function(x) { TimeStep * sum(tab[1:x, 4]) }) #nrow
-            
-            # --- Data Preparation for ggplot2 ---
-            
-            # Convert 'tab' to a data frame (if it isn't already)
-            tab_df <- as.data.frame(tab)
-            tab_df$Time <- tab_df[, 1]  # Add a 'Time' column for x-axis
-            nsortie=length(Listsortie)
-            # 1. Volume Plot Data
-            volume_data <- data.frame(
-              Time = tab_df$Time,
-              Injecte = CumulAddVol,
-              Domaine = tab_df[, 3],
-              `Domaine + sorties` = tab_df[, 3] + rowSums(CumulDebit[, 1:nsortie, drop = FALSE]),
-              check.names = FALSE  # Prevent column name modification
-            )
-            
-            # Add cumulative discharge columns, handling potential NAs, and filtering!
-            for (isor in 1:nsortie) {
-              col_name <- paste0("Sortie ", isor)
-              volume_data[[col_name]] <- CumulDebit[, isor]
-            }
-            
-            volume_long <- pivot_longer(volume_data,
-                                        cols = -Time,
-                                        names_to = "Variable",
-                                        values_to = "Volume")
-            
-            # 2. Rainfall Plot Data (Already in a good format)
-            rainfall_data <- data.frame(
-              Time = tab_df$Time,
-              Rainfall = tab_df[, 2]
-            )
-            
-            # 3. Net Volume Plot Data (Already in a good format)
-            netvolume_data <- data.frame(
-              Time = tab_df$Time,
-              NetVolume = tab_df[, 4]
-            )
-            MotsCles2=colnames(tab_df)
-            PosFB2=grep(MotsCles2,pattern="FLUX BOUNDARY")
-            PosCu2=grep(MotsCles2,pattern="CULVERT")
-            # 4. Discharge Plot Data
-            discharge_data <- tab_df[, c("Time", MotsCles2[PosFB2])]
-            discharge_data <- discharge_data[, colSums(is.na(discharge_data)) < nrow(discharge_data)] # Remove all-NA columns
-            # Filter discharge data to keep only columns with at least one non-zero, non-NA value
-            # discharge_data <- discharge_data[, c(TRUE, sapply(discharge_data[, -1, drop = FALSE], function(x) any(!is.na(x) & x != 0)))]
-            
-            discharge_long <- pivot_longer(discharge_data,
-                                           cols = -Time,
-                                           names_to = "Boundary",
-                                           values_to = "Discharge")
-            
-            
-            # 5. Culvert Discharge Plot Data
-            if(!is_empty(PosCu2)){
-              culvert_data <- tab_df[, c("Time", MotsCles2[PosCu2])]
-              culvert_data <- culvert_data[, colSums(is.na(culvert_data)) < nrow(culvert_data)]  # Remove columns that are all NA
-              # Filter culvert data to keep only columns with at least one non-zero value
-              culvert_data <- culvert_data[, c(TRUE, sapply(culvert_data[, -1, drop = FALSE], function(x) any(!is.na(x) & x != 0)))]
-              
-              culvert_long <- pivot_longer(culvert_data,
-                                           cols = -Time,
-                                           names_to = "Culvert",
-                                           values_to = "Discharge")
-            }
-            
-            
-            
-            
-            # --- ggplot2 Plotting ---
-            
-            # Create the plots (rest of plotting code remains the same)
-            p_volume <- ggplot(volume_long, aes(x = Time, y = Volume, color = Variable)) +
-              geom_line() +
-              labs(title = nomsortie,
-                   x = "Temps Telemac (s)",
-                   y = "Volume (m3)",
-                   color = "Variable") +
-              theme_bw()
-            
-            p_rainfall <- ggplot(rainfall_data, aes(x = Time, y = Rainfall)) +
-              geom_line() +
-              labs(title = "Pluie Injectee",
-                   x = "Temps Telemac (s)",
-                   y = "Cumul (m)") +
-              theme_bw()
-            
-            p_netvolume <- ggplot(netvolume_data, aes(x = Time, y = NetVolume)) +
-              geom_line() +
-              labs(title = "Volume net",
-                   x = "Temps Telemac (s)",
-                   y = "Apport a chaque pas de calcul (m3)") +
-              theme_bw()
-            
-            
-            debit_sortie <- data.frame(Time=discharge_long$Time+datedebut,Q=discharge_long$Discharge,Type=discharge_long$Boundary)
-            
-            p_discharge <- ggplot(debit_sortie, aes(x = Time, y = -Q, color = Type)) +
-              geom_line() +
-              labs(title = "Debit Sorties",
-                   x = "Date ",
-                   y = "Debit (m3/s)",
-                   color = "Boundary") +
-              theme_bw() +
-              ylim(0, NA)  # Important: Set y-axis to start at 0
-            
-            p_discharge <- ggplot(data =debit_sortie,aes(x = Time, y=abs(Q)))+
-              geom_line(aes(color = Type),size=0.7) +
-              # scale_linetype_manual(values=df_sans_na$TYPE,guide = "none")+
-              ylab("Débit [m3/s]") +
-              xlab("Date (heure météo)")+
-              scale_x_datetime(#date_breaks = "day",
-                limits = c(lim_inf, 
-                           lim_sup),
-                expand = c(0,0))+
-              theme_bw() +
-              theme(                    
-                legend.title = element_blank(),
-                legend.key.size = unit(0.4,"cm") ,
-                legend.text = element_text(size = 10),
-                legend.position = "right")
-            
-            if(!is_empty(PosCu2) ){
-              debit_buses <- data.frame(Time=culvert_long$Time+datedebut,Q=culvert_long$Discharge,Type=culvert_long$Culvert)
-              p_culvert <- ggplot(debit_buses, aes(x = Time, y = Q, color = Type)) +
-                geom_line() +
-                labs(title = "Debit Ouvrages",
-                     x = "Date",
-                     y = "Debit (m3/s)",
-                     color = "Culvert") +
-                theme_bw() +
-                ylim(0, max(culvert_long$Discharge, na.rm = TRUE)) # Set y limits based on the data
-              
-            }
-            # Combine and save
-            # Convert ggplot2 plots to plotly interactive plots
-            gp_volume <- ggplotly(p_volume, tooltip = c("x", "y", "color"),dynamicTicks = TRUE)
-            gp_rainfall <- ggplotly(p_rainfall, tooltip = c("x", "y"),dynamicTicks = TRUE)
-            gp_netvolume <- ggplotly(p_netvolume, tooltip = c("x", "y"),dynamicTicks = TRUE)
-            gp_discharge <- ggplotly(p_discharge, tooltip = c("x", "y", "color"),dynamicTicks = TRUE)
-            if(!is_empty(PosCu2) ){
-              gp_culvert <- ggplotly(p_culvert, tooltip = c("x", "y", "color"),dynamicTicks = TRUE)
-            }
-            
-            # Combine plots using subplot (from plotly)
-            # combined_plotly <- subplot(gp_volume, gp_rainfall, gp_netvolume, gp_discharge, gp_culvert,
-            #                            nrows = 5, # Arrange plots vertically
-            #                            titleX = TRUE, titleY = TRUE, # Show axis titles
-            #                            margin = 0.05, # Adjust margins as needed
-            #                            shareX = TRUE)  # Share the x-axis (very important for time series)
-            # 
-            # 
-            # # Save as a single HTML file
-            # htmlwidgets::saveWidget(combined_plotly,
-            #                         file = file.path(dsnlayerC, paste0(substr(nomsortie, 1, nchar(nomsortie) - 7), ".html")),
-            #                         selfcontained = TRUE) # Embed all dependencies
-            # 
-            
-            figsortie <- plotly::subplot(fig3,fig1, gp_discharge, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-              plotly::layout(title = list(text = paste0("Hyéto + Q sortie ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                             plot_bgcolor='#e5ecf6',
-                             xaxis = list(
-                               zerolinecolor = '#ffff',
-                               zerolinewidth = 2,
-                               gridcolor = 'ffff'       #☻ type = 'date'
-                               # tickformat = "%d %B (%a)<br>%Y"
-                             ),
-                             yaxis = list(
-                               zerolinecolor = '#ffff',
-                               zerolinewidth = 2,
-                               gridcolor = 'ffff'))
-            figsortieV <- plotly::subplot(fig1,gp_volume, gp_discharge, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-              plotly::layout(title = list(text = paste0("Hyéto + Vol et Q sortie  ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                             plot_bgcolor='#e5ecf6',
-                             xaxis = list(
-                               zerolinecolor = '#ffff',
-                               zerolinewidth = 2,
-                               gridcolor = 'ffff'       #☻ type = 'date'
-                               # tickformat = "%d %B (%a)<br>%Y"
-                             ),
-                             yaxis = list(
-                               zerolinecolor = '#ffff',
-                               zerolinewidth = 2,
-                               gridcolor = 'ffff'))
-            
-            if(!is_empty(PosCu2) ){
-              figculvert <- plotly::subplot(fig3,fig1, gp_culvert, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-                plotly::layout(title = list(text = paste0("Hyéto + Q OH ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                               plot_bgcolor='#e5ecf6',
-                               xaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'       #☻ type = 'date'
-                                 # tickformat = "%d %B (%a)<br>%Y"
-                               ),
-                               yaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'))
-            }
-          }
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            sc_sf$ID <- as.character(sc_sf$ID)
-            tab_sc <- inner_join(tab_sc,sc_sf,by = c("nom"="ID"))
-            filepath_plotly_all <- file.path(dsnlayerC,paste0(gsub("\\..*", "", SC_list[i_filesc]),"_PN_PB_Q_Obs.html"))
-            if(!file.exists(filepath_plotly_all)){
-              htmlwidgets::saveWidget(plotly::partial_bundle(fig),
-                                      file = filepath_plotly_all,
-                                      libdir = "lib")
-              
-              filepath_plotly_allz <- file.path(dsnlayerC,paste0(gsub("\\..*", "", SC_list[i_filesc]),"_PN_PB_Z_Obs.html"))
-              
-              
-              htmlwidgets::saveWidget(plotly::partial_bundle(figz),
-                                      file = filepath_plotly_allz,
-                                      libdir = "lib")
-              
-              filepath_plotly_allH <- file.path(dsnlayerC,paste0(gsub("\\..*", "", SC_list[i_filesc]),"_PN_PB_H_Obs.html"))
-              
-              htmlwidgets::saveWidget(plotly::partial_bundle(figh),
-                                      file = filepath_plotly_allH,
-                                      libdir = "lib")
-            }
-          }
-          split_listsortie <- strsplit(Listsortie[[i_filesc]],"_")[[1]]
-          namesortie <- paste(split_listsortie[1:7],collapse = "_")
-          filepath_plotly_allqs <- file.path(dsnlayerC,paste0(gsub("\\..*", "", namesortie),"_PN_PB_QS_Obs.html"))
-          if(!file.exists(filepath_plotly_allqs)){
-            htmlwidgets::saveWidget(plotly::partial_bundle(figsortie),
-                                    file = filepath_plotly_allqs,
-                                    libdir = "lib")
-            filepath_plotly_allvqs <- file.path(dsnlayerC,paste0(gsub("\\..*", "", namesortie),"_PN_PB_VQS_Obs.html"))
-            # filepath_plotly_allvqs <- file.path(dsnlayerC,paste0(gsub("\\..*", "", Listsortie[[i_filesc]],"_PN_PB_VQS_Obs.html")))
-            htmlwidgets::saveWidget(plotly::partial_bundle(figsortieV),
-                                    file = filepath_plotly_allvqs,
-                                    libdir = "lib")
-            
-            
-            if(!is_empty(PosCu2) ){
-              filepath_plotly_allOH <- file.path(dsnlayerC,paste0(gsub("\\..*", "", namesortie),"_PN_PB_QOH_Obs.html"))
-              
-              htmlwidgets::saveWidget(plotly::partial_bundle(figculvert),
-                                      file = filepath_plotly_allOH,
-                                      libdir = "lib")
-            }
-          }
-          if(dir.exists(file.path(dsnlayerC,"lib"))){
-            
-            unlink(file.path(dsnlayerC,"lib"),recursive = TRUE)
-          }
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            tabmaxq <- tab_sc %>% 
-              group_by(nom) %>% 
-              filter(abs(Q) == max(abs(min(Q)),abs(max(Q)))) %>% 
-              filter(Time == min(Time))
-            tabmaxq$nom <- as.character(tabmaxq$nom)
-            sc_sf$ID <- as.character(sc_sf$ID)
-            if("Q" %in% names(sc_sf)){
-              sc_sf <- sc_sf[,-which(names(sc_sf)=="Q")]
-            }
-            new_sc_sf <- left_join(x =sc_sf,y = tabmaxq,by=c("ID"="nom") )
-            new_sc_sf$Q <- abs(new_sc_sf$Q )
-            if(grepl("Evt", SC_list[i_filesc], fixed = TRUE)){
-              new_sc_sf$DATE <- as.character(new_sc_sf$DATE)
-            }
-          }
-          
-          
-          
-        }else{
-          
-          name_case_split <- strsplit(paste0("brute_",SC_list[i_filesc]),"_")[[1]]
-          name_case <- do.call(paste, c(as.list(name_case_split[1:6]), sep = "_"))
-          chem_pluie <- file.path(dsnPluie,contour$NOMPOST)
-          file_brute <- list.files(chem_pluie,pattern = name_case,full.names = T)
-          file_brute <- file_brute[1]
-          
-          # if(is_empty(file_brute)){
-          #   file_brute <- list.files(chem_pluie,pattern = name_case_split[5],full.names = T)
-          # }
-          if(!is.na(file_brute)){
-            tab_brute <- read.table(file_brute,header = TRUE)
-            cumul_brute <- tab_brute/5
-            cumul_brute_ <- cumul_brute
-            for (ibrut in 2:length(cumul_brute$Time)) {
-              if(ibrut==2){
-                cumul_brute$Val[ibrut]=cumul_brute_$Val[ibrut]+cumul_brute_$Val[ibrut-1]
-              }else{
-                cumul_brute$Val[ibrut]=cumul_brute_$Val[ibrut]+sum(cumul_brute_$Val[1:(ibrut-1)])
-              }
-              
-              
-              
-            }
-          }
-          name_split3 <- strsplit(Listsortie[[i_filesc]],"_")
-          name_split <- strsplit(SC_list[i_filesc],"_")[[1]]
-          name_case_split_ <- strsplit(SC_list[i_filesc],"_")[[1]]
-          name_case_ <- do.call(paste, c(as.list(name_case_split_[1:6]), sep = "_"))
-          
-          DUREE= (as.numeric(gsub("[^0-9.]", "", name_split3[[1]][7])) + as.numeric(gsub("[^0-9.]", "", name_split3[[1]][8]))/60)*3600
-          # DUREE=(as.numeric(substr(name_split[5],1,2))+as.numeric(substr(name_split[5],4,5))/60)*3600
-          
-          datedebut <- "190001010000"
-          datedebut <- strptime(x = datedebut,format = "%Y%m%d%H%M" )
-          
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            tab_sc_path <- file.path(dsnlayerC,SC_list[i_filesc])
-            tab_sc <- read.csv(file = tab_sc_path,
-                               header =FALSE,sep = "",skip = 2,col.names = cl_names 
-            )
-            # GRAVE NABIL
-            # debut_time <- which(tab_sc$Time=="60.00" | tab_sc$Time==60)
-            pasexportstr=sprintf("%.2f", pasexport)
-            debut_time <- which(tab_sc$Time==pasexportstr | tab_sc$Time==pasexport)
-            
-            if(min(debut_time)>1){
-              tab_sc <- tab_sc[-(1:(debut_time-1)),]
-            }
-          }
-          ##################################################################################################  
-          ###############################################################################
-          #{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
-          tabexp_=cbind( format(XPluieBrut,format="%Y/%m/%d %H:%M:%S"),PluieBrut,PluieNette,Vbrut,Vnet)
-          
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            tab_sc[,2:length(colnames(tab_sc))] <- data.frame(lapply(tab_sc,funx))[,2:length(colnames(tab_sc))]
-            tab_sc$DATE <- datedebut+as.numeric(tab_sc$Time)
-            tab_sc$nom <- as.character(tab_sc$nom)
-            sc_sf$ID <- as.character(sc_sf$ID)
-            tab_sc <- inner_join(tab_sc,sc_sf,by = c("nom"="ID"))
-            sc_names <- unique(tab_sc$NOM)
-            sc_list_obs <- list.files(path = dsnscobs,full.names = T)
-            sc_list_match <- unlist(lapply(sc_names, function(x) grep(x, sc_list_obs, value = TRUE)))
-            if(length(sc_list_match)>0){
-              sc_list_match_Q <- unlist(lapply("_Q.csv", function(x) grep(x, sc_list_match, value = TRUE)))
-              sc_list_match_Z <- unlist(lapply("_Z.csv", function(x) grep(x, sc_list_match, value = TRUE)))
-              sc_list_match_H <- unlist(lapply("_H.csv", function(x) grep(x, sc_list_match, value = TRUE)))
-              
-              myfiles = lapply(sc_list_match_Q, read.csv)
-              myfilesZ = lapply(sc_list_match_Z, read.csv)
-              myfilesH = lapply(sc_list_match_H, read.csv)
-            }
-          }
-          
-          tabexp_df <- as.data.frame(tabexp_)
-          colnames(tabexp_df) <- colnames
-          
-          tab_pb <- data.frame(Time = as.POSIXct(tabexp_df$XPluieBrut),
-                               Val = abs(round(as.numeric(tabexp_df$PluieBrut),1)),
-                               Nom = "Pluie brute")
-          tab_pb <- tab_pb[-c(1,length(tab_pb$Time)),]
-          tab_pn <- data.frame(Time = as.POSIXct(tabexp_df$XPluieBrut),
-                               Val = abs(round(as.numeric(tabexp_df$PluieNette),1)),
-                               Nom = "Pluie nette")
-          tab_pn <- tab_pn[-c(1,2),]
-          tab_vb <- data.frame(Time=as.POSIXct(tabexp_df$XPluieBrut) ,
-                               Val=round(as.numeric(tabexp_df$Vbrut,1)),
-                               Nom="Cumul brut")
-          if(!is.na(file_brute)){
-            tab_vb <- na.omit(tab_vb)
-            tab_vb$Val <-  cumul_brute$Val
-          }
-          tab_vn <- data.frame(Time=as.POSIXct(tabexp_df$XPluieBrut),
-                               Val=round(as.numeric(tabexp_df$Vnet,1)) ,
-                               Nom="Cumul net")
-          
-          tab_all_cumul <- rbind.data.frame(na.omit(tab_vb),na.omit(tab_vn))
-          
-          
-          
-          
-          pt_pluie <- as.numeric(gsub("\\D", "", name_split[10]))
-          if(!is.na(file_brute)){
-            # tab_all_cumul$Val <-  cumul_brute$Val
-            tab_pb$Val <- tab_brute$Val*3600/((pasexport)*pt_pluie)
-          }
-          
-          tab_pn$Time <- tab_pb$Time
-          tab_pluieall <- rbind.data.frame(tab_pb,tab_pn)
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            lim_inf <- max(min(as.POSIXct(tab_sc$DATE),na.rm = T),min(as.POSIXct(tab_pluieall$Time),na.rm = T))
-            lim_sup <- max(max(as.POSIXct(tab_sc$DATE),na.rm = T),max(as.POSIXct(tab_pluieall$Time),na.rm = T))
-          }else{
-            lim_inf <- min(as.POSIXct(tab_pluieall$Time),na.rm = T)
-            lim_sup <- max(as.POSIXct(tab_pluieall$Time),na.rm = T)
-          }
-          
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            if(length(sc_list_match)>0){
-              mydf <- do.call(rbind.data.frame,myfiles )
-              ajouter_heure_si_manquante <- function(date_str) {
-                if (grepl(" ", date_str)) { # Vérifie si un espace est présent (indiquant potentiellement une heure)
-                  return(date_str) # L'heure est probablement déjà là
-                } else {
-                  return(paste0(date_str, " 00:00:00")) # Ajoute l'heure de minuit
-                }
-              }
-              # dates_texte_modifiees <- unname(sapply(mydf$Date, ajouter_heure_si_manquante))
-              mydf$Date <- as.POSIXct(unname(sapply(mydf$Date, ajouter_heure_si_manquante)),tz="UTC",format="%Y-%m-%d %H:%M:%S")
-              name_split
-              # mydf_select <- mydf[grepl(paste0("_",name_split[4],"_"),mydf$nom) ,]
-              mydf_select <- mydf %>%
-                filter(Date >= as.POSIXct(lim_inf) & Date < as.POSIXct(lim_sup) )
-              
-              # if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-              tab_sc_csel <- data.frame(Date=tab_sc$DATE,
-                                        Q=tab_sc$Q,
-                                        NOM=tab_sc$NOM)
-              tab_sc_all <- rbind.data.frame(tab_sc_csel,mydf_select)
-              tab_sc_all$Date <- as.POSIXct(tab_sc_all$Date)
-              tab_sc_all$Q <- abs(tab_sc_all$Q)
-              
-              
-              mydfZ <- do.call(rbind.data.frame,myfilesZ )
-              mydfZ$Date <- as.POSIXct(mydfZ$Date,tz="UTC")
-              mydfZ_select <- mydfZ %>% 
-                filter(Date >= as.POSIXct(lim_inf) & Date < as.POSIXct(lim_sup) )
-              
-              mydfH <- do.call(rbind.data.frame,myfilesH )
-              mydfH$Date <- as.POSIXct(unname(sapply(mydfH$Date, ajouter_heure_si_manquante)),tz="UTC",format="%Y-%m-%d %H:%M:%S")
-              mydfH_select <- mydfH %>% 
-                filter(Date >= as.POSIXct(lim_inf) & Date < as.POSIXct(lim_sup) )
-              tab_sc_cselZ <- data.frame(Date=tab_sc$DATE,
-                                         Z=tab_sc$Zmoy,
-                                         NOM=tab_sc$NOM)
-              tab_sc_cselZ$Z[which(tab_sc_cselZ$Z==0)] <- NA
-              tab_sc_allZ <- rbind.data.frame(tab_sc_cselZ,mydfZ_select)
-              tab_sc_allZ$Date <- as.POSIXct(tab_sc_allZ$Date)
-              
-              
-              tab_sc_cselH <- data.frame(Date=tab_sc$DATE,
-                                         H=tab_sc$Hmax,
-                                         NOM=tab_sc$NOM)
-              # tab_sc_cselH$H[which(tab_sc_cselH$H==0)] <- NA
-              tab_sc_allH <- rbind.data.frame(tab_sc_cselH,mydfH_select)
-              tab_sc_allH$Date <- as.POSIXct(tab_sc_allH$Date)
-              
-              
-            }else{
-              if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-                tab_sc_all <- tab_sc
-                tab_sc_all$Date <- tab_sc_all$DATE
-                tab_sc_all$Q <- abs(tab_sc_all$Q)
-                tab_sc_allZ <- tab_sc
-                tab_sc_allZ$Date <- tab_sc_allZ$DATE
-                tab_sc_allZ$Z <- tab_sc$Zmoy
-                tab_sc_allZ$Z[which(tab_sc_allZ$Z==0)] <- NA
-                tab_sc_allH <- tab_sc
-                tab_sc_allH$Date <- tab_sc_allH$DATE
-                tab_sc_allH$H <- tab_sc$Hmax
-              }
-            }
-          }
-          g1 <- ggplot(tab_pluieall, aes(Time , Val,fill = Nom)) +
-            geom_col(position = 'identity',width = 10) +
-            scale_fill_manual(values=c( 
-              "#33FFFF", 
-              "#9933FF")) +
-            theme_bw() +
-            ylab("Intentisté [mm/h]") +
-            scale_x_datetime(#date_breaks = "day",
-              limits = c(lim_inf, 
-                         lim_sup),
-              expand = c(0,0))+
-            theme(axis.title.x    = element_blank(),
-                  axis.text.x     = element_blank(),
-                  axis.ticks.x    = element_blank(),
-                  axis.title.y=element_text(vjust = 2),
-                  legend.title = element_blank(),
-                  legend.key.size = unit(0.4,"cm") ,
-                  legend.text = element_text(size = 10),
-                  legend.position = "right")
-          
-          g3 <- ggplot(tab_all_cumul, aes(Time  ,Val)) +
-            geom_line(aes(color = Nom),size=1.1) +
-            scale_color_manual(values=c( 
-              "#33FFFF", 
-              "#9933FF")) +
-            theme_bw() +
-            ylab("Cumul [mm]") +
-            scale_x_datetime(#date_breaks = "day",
-              limits = c(lim_inf, 
-                         lim_sup),
-              expand = c(0,0))+
-            theme(axis.title.x    = element_blank(),
-                  axis.text.x     = element_blank(),
-                  axis.ticks.x    = element_blank(),
-                  axis.title.y=element_text(vjust = 2),
-                  legend.title = element_blank(),
-                  legend.key.size = unit(0.4,"cm") ,
-                  legend.text = element_text(size = 10),
-                  legend.position = "right")
-          # tab_sc$Q <- abs(tab_sc$Q)
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            tab_sc_all$TYPE <- "solid"
-            tab_sc_all$TYPE[grepl("_obs", tab_sc_all$NOM)]="dashed"
-            df_sans_na <- tab_sc_all %>%
-              dplyr::distinct(NOM,.keep_all = TRUE) 
-            
-            
-            df_sans_na <- df_sans_na[order(df_sans_na$NOM), ]
-          }
-          
-          fig1 <- plotly::ggplotly(g1,dynamicTicks = T) 
-          
-          fig3 <- plotly::ggplotly(g3,dynamicTicks = T)
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            filepath_plotly_all <- file.path(dsnlayerC,paste0(gsub("\\..*", "", SC_list[i_filesc]),"_PN_PB_Q_Obs.html"))
-            if(!file.exists(filepath_plotly_all)){
-              g2 <- ggplot(data =tab_sc_all,aes(x = Date, y=round(Q,digits=1)))+
-                geom_line(aes(color = NOM),size=0.7,linetype = tab_sc_all$TYPE) +
-                scale_linetype_manual(values=df_sans_na$TYPE,guide = "none")+
-                ylab("Débit [m3/s]") +
-                xlab("Date (heure météo)")+
-                scale_x_datetime(#date_breaks = "day",
-                  limits = c(lim_inf, 
-                             lim_sup),
-                  expand = c(0,0))+
-                theme_bw() +
-                theme(                    
-                  legend.title = element_blank(),
-                  legend.key.size = unit(0.4,"cm") ,
-                  legend.text = element_text(size = 10),
-                  legend.position = "right")
-              
-              tab_sc_allZ$TYPE <- "solid"
-              tab_sc_allZ$TYPE[grepl("_obs", tab_sc_allZ$NOM)]="dashed"
-              
-              df_sans_naz <- tab_sc_allZ %>%
-                dplyr::distinct(NOM,.keep_all = TRUE) 
-              
-              
-              df_sans_naz <- df_sans_naz[order(df_sans_naz$NOM), ]
-              
-              
-              g4 <- ggplot(data =tab_sc_allZ,aes(x = Date, y=Z,linetype = NOM))+
-                geom_line(aes(color = NOM),size=0.7) +
-                scale_linetype_manual(values=df_sans_naz$TYPE,guide = "none")+
-                # scale_color_manual(sample(colors(), 38))+
-                ylab("Côte [m]") +
-                xlab("Date (heure météo)")+
-                scale_x_datetime(#date_breaks = "day",
-                  limits = c(lim_inf, 
-                             lim_sup),
-                  expand = c(0,0))+
-                theme_bw() +
-                theme(                    
-                  legend.title = element_blank(),
-                  legend.key.size = unit(0.4,"cm") ,
-                  legend.text = element_text(size = 10),
-                  legend.position = "right")
-              
-              tab_sc_allH$TYPE <- "solid"
-              tab_sc_allH$TYPE[grepl("_obs", tab_sc_allH$NOM)]="longdash"
-              
-              df_sans_nah <- tab_sc_all %>%
-                dplyr::distinct(NOM,.keep_all = TRUE) 
-              
-              
-              df_sans_nah <- df_sans_nah[order(df_sans_nah$NOM), ]
-              g5 <- ggplot(data =tab_sc_allH,aes(x = Date, y=H))+
-                geom_line(aes(color = NOM),size=0.7,linetype = tab_sc_allH$TYPE) +
-                scale_linetype_manual(values=df_sans_nah$TYPE,guide = "none")+
-                ylab("Hauteur [m]") +
-                xlab("Date (heure météo)")+
-                scale_x_datetime(#date_breaks = "day",
-                  limits = c(lim_inf, 
-                             lim_sup),
-                  expand = c(0,0))+
-                theme_bw() +
-                theme(                    
-                  legend.title = element_blank(),
-                  legend.key.size = unit(0.4,"cm") ,
-                  legend.text = element_text(size = 10),
-                  legend.position = "right")  
-              
-              fig2 <- plotly::ggplotly(g2,dynamicTicks = T)
-              fig4 <- plotly::ggplotly(g4,dynamicTicks = T)
-              fig5 <- plotly::ggplotly(g5,dynamicTicks = T)
-              fig <- plotly::subplot(fig3,fig1, fig2, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-                plotly::layout(title = list(text = paste0("Hyéto + Hydrogramme ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                               plot_bgcolor='#e5ecf6',
-                               xaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'       #☻ type = 'date'
-                                 # tickformat = "%d %B (%a)<br>%Y"
-                               ),
-                               yaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'))
-              
-              figz <- plotly::subplot(fig3,fig1, fig4, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-                plotly::layout(title = list(text = paste0("Hyéto + Côtes ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                               plot_bgcolor='#e5ecf6',
-                               xaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'       #☻ type = 'date'
-                                 # tickformat = "%d %B (%a)<br>%Y"
-                               ),
-                               yaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'))
-              
-              
-              figh <- plotly::subplot(fig3,fig1, fig5, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-                plotly::layout(title = list(text = paste0("Hyéto + Hauteur ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                               plot_bgcolor='#e5ecf6',
-                               xaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'       #☻ type = 'date'
-                                 # tickformat = "%d %B (%a)<br>%Y"
-                               ),
-                               yaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'))
-            }
-            
-          }
-          
-          
-          split_listsortie <- strsplit(Listsortie[[i_filesc]],"_")[[1]]
-          namesortie <- paste(split_listsortie[1:7],collapse = "_")
-          filepath_plotly_allvqs <- file.path(dsnlayerC,paste0(gsub("\\..*", "", namesortie),"_PN_PB_VQS_Obs.html"))
-          if(!file.exists(filepath_plotly_allvqs) ){
-            Lignes=readLines(con=file.path(dsnlayerC,substr(nomsortie,1,nchar(nomsortie)-30)))
-            
-            RecupTps=rbind("TIME STEP ")
-            indic=regexpr(RecupTps[1,1],as.character(Lignes))
-            Past_Ts=as.numeric(substr(Lignes[which(indic>-1)],38,nchar(Lignes[which(indic>-1)])))
-            # browser()
-            Lignes=readLines(con=file.path(dsnlayerC,nomsortie))
-            # Mots-clés généraux
-            MotsCles <- rbind(
-              cbind("RELATIVE ERROR IN VOLUME AT T", 37, 54),
-              cbind("RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61),
-              cbind("VOLUME IN THE DOMAIN", 28, 44),
-              cbind("ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61),
-              cbind("RELATIVE ERROR IN VOLUME AT T", 58, 75),
-              cbind(paste0("FLUX BOUNDARY    ", 1:9), 25, 42),
-              cbind(paste0("FLUX BOUNDARY   ", 10:80), 25, 42),
-              cbind(paste0("CULVERT            ", 1:9, "  DIS"),37,62),
-              cbind(paste0("CULVERT           ", 10:99, "  DIS"),37,62)
-            )
-            
-            
-            
-            PosFB=grep(MotsCles,pattern="FLUX BOUNDARY")
-            PosCu=grep(MotsCles,pattern="CULVERT")
-            PosCuL=PosCu[length(PosCu)/2+(1:(length(PosCu)/2))]
-            PosCu=PosCu[1:(length(PosCu)/2)]
-            
-            # MotsCles=rbind(cbind("RELATIVE ERROR IN VOLUME AT T",37,54),
-            #                cbind("RUNOFF_SCS_CN : ACCUMULATED RAINFALL",44,61),
-            #                cbind("VOLUME IN THE DOMAIN",28,44),
-            #                cbind("FLUX BOUNDARY    1",25,42),
-            #                cbind("RELATIVE ERROR IN VOLUME AT T",58,75))
-            #
-            # FLUX BOUNDARY    1:    -0.000000     M3/S  ( >0 : ENTERING  <0 : EXITING )
-            # FLUX BOUNDARY    2:
-            
-            for (ic in 1:dim(MotsCles)[1]){
-              # print(MotsCles[ic,1])
-              indic=regexpr(MotsCles[ic,1],as.character(Lignes))
-              correspond=which(indic>-1)
-              # Ajout car j ai ecrit dans buse.f plusieurs fois culvert...
-              correspond=correspond[which(is.na(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))==F)]
-              
-              if (ic==1)
-              {
-                niter=length(correspond)
-                tab=matrix(0,niter,dim(MotsCles))
-                referenceT=correspond
-                tab[,1]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))
-              }else{
-                if (length(correspond)>0)
-                {
-                  
-                  # IL Y A UN BUG ((niter-length(correspond)+1):niter)
-                  # (niter-length(correspond)+1)
-                  # bonindice=((niter-length(correspond)+1):niter)
-                  
-                  bonindice=sapply(1:length(correspond), function(x) {which(referenceT>=correspond[x])[1]})
-                  # tab[do.call(rbind,bonindice),ic]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))
-                  tab[bonindice,ic]=matrix(as.numeric(substr(Lignes[correspond],MotsCles[ic,2],MotsCles[ic,3])))
-                }
-              }
-              
-            }
-            
-            # ... (votre code initial pour Lignes, RecupTps, Past_Ts, MotsCles, PosFB, PosCu etc. reste le même) ...
-            
-            # Assurez-vous que les colonnes 2 et 3 de MotsCles sont numériques
-            # Ceci est important car cbind peut les avoir converties en chaînes.
-            # MotsClesNum <- MotsCles
-            # MotsClesNum[,2] <- as.integer(as.numeric(MotsClesNum[,2]))
-            # MotsClesNum[,3] <- as.integer(as.numeric(MotsClesNum[,3]))
-            # 
-            # # Traitement du premier mot-clé (initialisation)
-            # ic <- 1
-            # keyword_info <- MotsClesNum[ic, ]
-            # indic <- regexpr(keyword_info[1], Lignes, fixed = TRUE) # fixed=TRUE si pas de regex
-            # correspond <- which(indic > -1)
-            # 
-            # # Filtrage pour les valeurs numériques valides
-            # valeurs_potentielles_str <- substr(Lignes[correspond], keyword_info[2], keyword_info[3])
-            # valides_num <- !is.na(suppressWarnings(as.numeric(valeurs_potentielles_str))) # suppressWarnings pour éviter les messages de coercion
-            # correspond <- correspond[valides_num]
-            # valeurs_numeriques <- as.numeric(valeurs_potentielles_str[valides_num])
-            # 
-            # if (length(correspond) == 0) {
-            #   stop(paste("Le premier mot-clé ('", keyword_info[1], "') n'a pas été trouvé ou n'a pas de valeurs numériques associées. Impossible d'initialiser la table.", sep=""))
-            # }
-            # 
-            # niter <- length(correspond)
-            # # Initialiser avec NA pour mieux voir les manquants
-            # tab <- matrix(NA_real_, nrow = niter, ncol = dim(MotsClesNum)[1])
-            # referenceT <- correspond # Ce sont les numéros de ligne du "TIME STEP" ou équivalent
-            # tab[, ic] <- valeurs_numeriques
-            # 
-            # # Boucle pour les mots-clés suivants
-            # if (dim(MotsClesNum)[1] > 1) {
-            #   for (ic in 2:dim(MotsClesNum)[1]) {
-            #     keyword_info <- MotsClesNum[ic, ]
-            #     # print(keyword_info[1]) # Décommenter pour le débogage
-            # 
-            #     indic <- regexpr(keyword_info[1], Lignes, fixed = TRUE) # fixed=TRUE si pas de regex
-            #     correspond_ic <- which(indic > -1)
-            # 
-            #     if (length(correspond_ic) > 0) {
-            #       # Filtrage pour les valeurs numériques valides
-            #       valeurs_potentielles_str_ic <- substr(Lignes[correspond_ic], keyword_info[2], keyword_info[3])
-            #       valides_num_ic <- !is.na(suppressWarnings(as.numeric(valeurs_potentielles_str_ic)))
-            # 
-            #       correspond_ic_filtre <- correspond_ic[valides_num_ic]
-            #       valeurs_numeriques_ic <- as.numeric(valeurs_potentielles_str_ic[valides_num_ic])
-            # 
-            #       if (length(correspond_ic_filtre) > 0) {
-            #         # OPTIMISATION MAJEURE ICI
-            #         # 'findInterval' trouve l'indice dans 'referenceT' pour chaque 'correspond_ic_filtre'.
-            #         # Cela signifie à quel "pas de temps" (ligne de 'tab') chaque valeur appartient.
-            #         bonindice <- findInterval(correspond_ic_filtre, referenceT)
-            # 
-            #         # S'assurer que les indices sont valides (findInterval peut retourner 0)
-            #         indices_valides_pour_tab <- bonindice > 0 & bonindice <= niter
-            # 
-            #         if(any(indices_valides_pour_tab)) {
-            #           # Assigner les valeurs aux bonnes lignes de la table 'tab'
-            #           # Si plusieurs correspond_ic_filtre tombent dans le même intervalle de referenceT,
-            #           # findInterval donnera le même indice pour eux. L'assignation vectorielle
-            #           # écrasera les valeurs précédentes pour cet indice, ce qui semble être
-            #           # le comportement implicite de votre code original avec sapply si plusieurs
-            #           # 'correspond' pointaient vers le même 'bonindice'.
-            #           tab[bonindice[indices_valides_pour_tab], ic] <- valeurs_numeriques_ic[indices_valides_pour_tab]
-            #         }
-            #       }
-            #     }
-            #   }
-            # }
-            
-            # Maintenant 'tab' devrait contenir vos données extraites.
-            # Past_Ts peut être ajouté à 'tab' si nécessaire, par exemple comme première colonne.
-            # Si Past_Ts a la même longueur que niter:
-            # tab_final <- cbind(Past_Ts, tab)
-            # (Attention à la correspondance des lignes/pas de temps)
-            # --- Étape 1: Définition améliorée de MotsCles ---
-            
-            
-            
-            
-            
-            colnames(tab)=MotsCles[,1]
-            # ... (previous code remains the same until the plotting section) ...
-            flux_cols_to_keep <- sapply(grep("FLUX BOUNDARY", colnames(tab), value = TRUE), function(col) {
-              any(tab[, col] != 0, na.rm = TRUE)
-            })
-            
-            # Identify Culvert columns (DIS) with at least one value > 0
-            culvert_cols_to_keep <- sapply(grep("CULVERT", colnames(tab), value = TRUE), function(col) {
-              any(tab[, col] != 0, na.rm = TRUE)
-            })
-            
-            tab <- tab[, c(TRUE, rep(TRUE, 4), flux_cols_to_keep, culvert_cols_to_keep)]  # Keep first 5 cols + selected
-            
-            write.table(tab,
-                        file=file.path(dsnlayerC,paste0(substr(nomsortie,1,nchar(nomsortie)-7),"_sortie.txt")),
-                        sep=";")
-            
-            
-            MotsCless=colnames(tab)
-            PosFB2=grep(MotsCless,pattern="FLUX BOUNDARY")
-            # Suppression du volume initial (confition limite)
-            if (length(tab)>2){ # Corrected condition: Check for more than one row
-              tab[, 3] = tab[, 3] - tab[1, 3]  # Subtract initial volume
-              TimeStep = tab[1, 1]  # Get the time step
-              CumulDebit = matrix(0, nrow(tab), length(PosFB2)) #nrow instead of dim
-              nsortie=0
-              
-              
-              
-              for (ip in PosFB2){ #6:15)
-                # print(dim(sapply(1:dim(tab)[1], function(x) {-TimeStep*sum(tab[1:x,ip])})))
-                CumulDebit[,ip-5]=sapply(1:dim(tab)[1], 
-                                         function(x) {-TimeStep*sum(tab[1:x,ip])})
-                # browser()
-                tab[is.na(tab[,ip])==T,ip]=0
-                if (max(abs(tab[,ip]))>0)
-                {
-                  nsortie=nsortie+1
-                }
-              }
-              # ...
-              tab[, 4] = tab[, 4] / Past_Ts  # Calculate volume per time step
-              CumulAddVol = sapply(1:nrow(tab), function(x) { TimeStep * sum(tab[1:x, 4]) }) #nrow
-              
-              # --- Data Preparation for ggplot2 ---
-              
-              # Convert 'tab' to a data frame (if it isn't already)
-              tab_df <- as.data.frame(tab)
-              tab_df$Time <- tab_df[, 1]  # Add a 'Time' column for x-axis
-              nsortie2=length(PosFB2)
-              # 1. Volume Plot Data
-              volume_data <- data.frame(
-                Time = tab_df$Time,
-                Injecte = CumulAddVol,
-                Domaine = tab_df[, 3],
-                `Domaine + sorties` = tab_df[, 3] + rowSums(CumulDebit[, 1:nsortie2, drop = FALSE]),
-                check.names = FALSE  # Prevent column name modification
-              )
-              
-              # Add cumulative discharge columns, handling potential NAs, and filtering!
-              for (isor in 1:nsortie2) {
-                col_name <- paste0("Sortie ", isor)
-                volume_data[[col_name]] <- CumulDebit[, isor]
-              }
-              
-              volume_long <- pivot_longer(volume_data,
-                                          cols = -Time,
-                                          names_to = "Variable",
-                                          values_to = "Volume")
-              
-              # 2. Rainfall Plot Data (Already in a good format)
-              rainfall_data <- data.frame(
-                Time = tab_df$Time,
-                Rainfall = tab_df[, 2]
-              )
-              
-              # 3. Net Volume Plot Data (Already in a good format)
-              netvolume_data <- data.frame(
-                Time = tab_df$Time,
-                NetVolume = tab_df[, 4]
-              )
-              MotsCles2=colnames(tab_df)
-              PosFB2=grep(MotsCles2,pattern="FLUX BOUNDARY")
-              PosCu2=grep(MotsCles2,pattern="CULVERT")
-              # 4. Discharge Plot Data
-              discharge_data <- tab_df[, c("Time", MotsCles2[PosFB2])]
-              discharge_data <- discharge_data[, colSums(is.na(discharge_data)) < nrow(discharge_data)] # Remove all-NA columns
-              # Filter discharge data to keep only columns with at least one non-zero, non-NA value
-              # discharge_data <- discharge_data[, c(TRUE, sapply(discharge_data[, -1, drop = FALSE], function(x) any(!is.na(x) & x != 0)))]
-              
-              discharge_long <- pivot_longer(discharge_data,
-                                             cols = -Time,
-                                             names_to = "Boundary",
-                                             values_to = "Discharge")
-              
-              
-              # 5. Culvert Discharge Plot Data
-              if(!is_empty(PosCu2) ){
-                culvert_data <- tab_df[, c("Time", MotsCles2[PosCu2])]
-                culvert_data <- culvert_data[, colSums(is.na(culvert_data)) < nrow(culvert_data)]  # Remove columns that are all NA
-                # Filter culvert data to keep only columns with at least one non-zero value
-                culvert_data <- culvert_data[, c(TRUE, sapply(culvert_data[, -1, drop = FALSE], function(x) any(!is.na(x) & x != 0)))]
-                
-                culvert_long <- pivot_longer(culvert_data,
-                                             cols = -Time,
-                                             names_to = "Culvert",
-                                             values_to = "Discharge")
-              }
-              
-              # Récupérer les niveaux uniques de la variable 'Variable'
-              niveaux_variable <- unique(volume_long$Variable)
-              nombre_niveaux <- length(niveaux_variable)
-              # Définir les couleurs pour les 3 premiers éléments (adaptez ces couleurs à vos besoins)
-              couleurs_specifiques <- c("green","blue" , "red") # Exemple de couleurs spécifiques
-              volume_long$Time=volume_long$Time+datedebut
-              # Vérifier s'il y a au moins 3 niveaux pour attribuer les couleurs spécifiques
-              if (nombre_niveaux >= 3) {
-                # Assigner les couleurs spécifiques aux 3 premiers niveaux
-                palette_couleurs <- setNames(couleurs_specifiques, niveaux_variable[1:3])
-                
-                # S'il y a plus de 3 niveaux, générer des couleurs aléatoires pour les niveaux restants
-                if (nombre_niveaux > 3) {
-                  niveaux_restants <- niveaux_variable[4:nombre_niveaux]
-                  # Générer des couleurs aléatoires. 'hue_pal()' crée une palette de couleurs basée sur la teinte.
-                  # Assurez-vous que le nombre de couleurs générées correspond au nombre de niveaux restants.
-                  couleurs_aleatoires <- scales::hue_pal()(length(niveaux_restants))
-                  names(couleurs_aleatoires) <- niveaux_restants
-                  # Combiner les couleurs spécifiques et aléatoires
-                  palette_couleurs <- c(palette_couleurs, couleurs_aleatoires)
-                }
-              } else {
-                # Si moins de 3 niveaux, générer des couleurs aléatoires pour tous les niveaux
-                palette_couleurs <- scales::hue_pal()(nombre_niveaux)
-                names(palette_couleurs) <- niveaux_variable
-              }
-              types_lignes_personnalises <- c("solid", "solid", "12",rep("dotdash",nsortie2) )
-              tailles_lignes_personnalisees <- c(0.5, 0.5, 1.2, rep(0.5,nsortie2)) # Exemple : tailles en mm
-              p_volume <- ggplot(volume_long, aes(x = Time, y = Volume, color = Variable, linetype = Variable, size = Variable)) +
-                geom_line() +
-                labs(title = nomsortie,
-                     x = "Temps Telemac (s)",
-                     y = "Volume (m3)",
-                     color = "Variable",
-                     linetype = "Variable",
-                     size = "Variable") +
-                theme_bw() +
-                scale_linetype_manual(values = types_lignes_personnalises) + # Définissez les types de lignes
-                scale_size_manual(values = tailles_lignes_personnalisees) + # Définissez les tailles de lignes
-                scale_color_manual(values = palette_couleurs) # <<< Ajoutez cette ligne pour définir les couleurs
-              
-              # p_volume <- ggplot(volume_long, aes(x = Time, y = Volume, color = Variable, linetype = Variable, size = Variable)) + # <<< Ajoutez size = Variable ici
-              #   geom_line() +
-              #   labs(title = nomsortie,
-              #        x = "Temps Telemac (s)",
-              #        y = "Volume (m3)",
-              #        color = "Variable",
-              #        linetype = "Variable",
-              #        size = "Variable") + # <<< Optionnel: personnalisez le titre de la légende size
-              #   theme_bw() +
-              #   scale_linetype_manual(values = types_lignes_personnalises) + # <<< Définissez les types de lignes
-              #   scale_size_manual(values = tailles_lignes_personnalisees) # <<< Ajoutez cette ligne pour définir les tailles de li
-              # 
-              # # p_volume <- ggplot(volume_long, aes(x = Time, y = Volume, color = Variable, linetype = Variable)) + # <<< Ajoutez linetype = Variable ici
-              # #   geom_line() +
-              #   labs(title = nomsortie,
-              #        x = "Temps Telemac (s)",
-              #        y = "Volume (m3)",
-              #        color = "Variable",
-              #        linetype = "Variable") + # <<< Optionnel: personnalisez le titre de la légende linetype
-              #   theme_bw() +
-              #   scale_linetype_manual(values = types_lignes_personnalises) 
-              # # --- ggplot2 Plotting ---
-              # 
-              # # Create the plots (rest of plotting code remains the same)
-              # volume_long$Time=volume_long$Time+datedebut
-              # p_volume <- ggplot(volume_long, aes(x = Time, y = Volume, color = Variable)) +
-              #   geom_line() +
-              #   labs(title = nomsortie,
-              #        x = "Temps Telemac (s)",
-              #        y = "Volume (m3)",
-              #        color = "Variable") +
-              #   theme_bw()
-              
-              p_rainfall <- ggplot(rainfall_data, aes(x = Time, y = Rainfall)) +
-                geom_line() +
-                labs(title = "Pluie Injectee",
-                     x = "Temps Telemac (s)",
-                     y = "Cumul (m)") +
-                theme_bw()
-              
-              p_netvolume <- ggplot(netvolume_data, aes(x = Time, y = NetVolume)) +
-                geom_line() +
-                labs(title = "Volume net",
-                     x = "Temps Telemac (s)",
-                     y = "Apport a chaque pas de calcul (m3)") +
-                theme_bw()
-              
-              
-              debit_sortie <- data.frame(Time=discharge_long$Time+datedebut,Q=discharge_long$Discharge,Type=discharge_long$Boundary)
-              
-              p_discharge <- ggplot(debit_sortie, aes(x = Time, y = -Q, color = Type)) +
-                geom_line() +
-                labs(title = "Debit Sorties",
-                     x = "Date ",
-                     y = "Debit (m3/s)",
-                     color = "Boundary") +
-                theme_bw() +
-                ylim(min(-debit_sortie$Q), NA)  # Important: Set y-axis to start at 0
-              
-              
-              if(!is_empty(PosCu2) ){
-                debit_buses <- data.frame(Time=culvert_long$Time+datedebut,Q=culvert_long$Discharge,Type=culvert_long$Culvert)
-                p_culvert <- ggplot(debit_buses, aes(x = Time, y = Q, color = Type)) +
-                  geom_line() +
-                  labs(title = "Debit Ouvrages",
-                       x = "Date",
-                       y = "Debit (m3/s)",
-                       color = "Culvert") +
-                  theme_bw() +
-                  ylim(0, max(culvert_long$Discharge, na.rm = TRUE)) # Set y limits based on the data
-                
-              }
-              # Combine and save
-              # Convert ggplot2 plots to plotly interactive plots
-              gp_volume <- ggplotly(p_volume, tooltip = c("x", "y", "color"),dynamicTicks = T)
-              gp_rainfall <- ggplotly(p_rainfall, tooltip = c("x", "y"),dynamicTicks = T)
-              gp_netvolume <- ggplotly(p_netvolume, tooltip = c("x", "y"),dynamicTicks = T)
-              gp_discharge <- ggplotly(p_discharge, tooltip = c("x", "y", "color"),dynamicTicks = T)
-              if(!is_empty(PosCu2) ){
-                gp_culvert <- ggplotly(p_culvert, tooltip = c("x", "y", "color"),dynamicTicks = T)
-              }
-              
-              # Combine plots using subplot (from plotly)
-              # combined_plotly <- subplot(gp_volume, gp_rainfall, gp_netvolume, gp_discharge, gp_culvert,
-              #                            nrows = 5, # Arrange plots vertically
-              #                            titleX = TRUE, titleY = TRUE, # Show axis titles
-              #                            margin = 0.05, # Adjust margins as needed
-              #                            shareX = TRUE)  # Share the x-axis (very important for time series)
-              # 
-              # 
-              # # Save as a single HTML file
-              # htmlwidgets::saveWidget(combined_plotly,
-              #                         file = file.path(dsnlayerC, paste0(substr(nomsortie, 1, nchar(nomsortie) - 7), ".html")),
-              #                         selfcontained = TRUE) # Embed all dependencies
-              # 
-              
-              figsortie <- plotly::subplot(fig3,fig1, gp_discharge, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-                plotly::layout(title = list(text = paste0("Hyéto + Q sortie ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                               plot_bgcolor='#e5ecf6',
-                               xaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'       #☻ type = 'date'
-                                 # tickformat = "%d %B (%a)<br>%Y"
-                               ),
-                               yaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'))
-              
-              figsortieV <- plotly::subplot(fig1,gp_volume, gp_discharge, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-                plotly::layout(title = list(text = paste0("Hyéto + Vol et Q sortie  ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                               plot_bgcolor='#e5ecf6',
-                               xaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'       #☻ type = 'date'
-                                 # tickformat = "%d %B (%a)<br>%Y"
-                               ),
-                               yaxis = list(
-                                 zerolinecolor = '#ffff',
-                                 zerolinewidth = 2,
-                                 gridcolor = 'ffff'))
-              
-              if(!is_empty(PosCu2) ){
-                figculvert <- plotly::subplot(fig3,fig1, gp_culvert, nrows = 3,shareX=TRUE,heights = c(0.5/4,1/4,2.5/4), titleY = TRUE, titleX = TRUE) %>%
-                  plotly::layout(title = list(text = paste0("Hyéto + Q OH ",name_case_," (Pluie sur tout le bassin)")),legend=list(title=list(text='')),
-                                 plot_bgcolor='#e5ecf6',
-                                 xaxis = list(
-                                   zerolinecolor = '#ffff',
-                                   zerolinewidth = 2,
-                                   gridcolor = 'ffff'       #☻ type = 'date'
-                                   # tickformat = "%d %B (%a)<br>%Y"
-                                 ),
-                                 yaxis = list(
-                                   zerolinecolor = '#ffff',
-                                   zerolinewidth = 2,
-                                   gridcolor = 'ffff'))
-                
-              }
-            }
-            
-            
-          }
-          ##############################################################OH Sortie###################       
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            sc_sf$ID <- as.character(sc_sf$ID)
-            tab_sc <- inner_join(tab_sc,sc_sf,by = c("nom"="ID"))
-            filepath_plotly_all <- file.path(dsnlayerC,paste0(gsub("\\..*", "", SC_list[i_filesc]),"_PN_PB_Q_Obs.html"))
-            if(!file.exists(filepath_plotly_all)){
-              htmlwidgets::saveWidget(plotly::partial_bundle(fig),
-                                      file = filepath_plotly_all,
-                                      libdir = "lib")
-              
-              filepath_plotly_allz <- file.path(dsnlayerC,paste0(gsub("\\..*", "", SC_list[i_filesc]),"_PN_PB_Z_Obs.html"))
-              
-              
-              htmlwidgets::saveWidget(plotly::partial_bundle(figz),
-                                      file = filepath_plotly_allz,
-                                      libdir = "lib")
-              
-              filepath_plotly_allH <- file.path(dsnlayerC,paste0(gsub("\\..*", "", SC_list[i_filesc]),"_PN_PB_H_Obs.html"))
-              
-              htmlwidgets::saveWidget(plotly::partial_bundle(figh),
-                                      file = filepath_plotly_allH,
-                                      libdir = "lib")
-            }
-          }
-          split_listsortie <- strsplit(Listsortie[[i_filesc]],"_")[[1]]
-          namesortie <- paste(split_listsortie[1:7],collapse = "_")
-          filepath_plotly_allqs <- file.path(dsnlayerC,paste0(gsub("\\..*", "", namesortie),"_PN_PB_QS_Obs.html"))
-          if(!file.exists(filepath_plotly_allqs)){
-            htmlwidgets::saveWidget(plotly::partial_bundle(figsortie),
-                                    file = filepath_plotly_allqs,
-                                    libdir = "lib")
-            filepath_plotly_allvqs <- file.path(dsnlayerC,paste0(gsub("\\..*", "", namesortie),"_PN_PB_VQS_Obs.html"))
-            # filepath_plotly_allvqs <- file.path(dsnlayerC,paste0(gsub("\\..*", "", Listsortie[[i_filesc]],"_PN_PB_VQS_Obs.html")))
-            htmlwidgets::saveWidget(plotly::partial_bundle(figsortieV),
-                                    file = filepath_plotly_allvqs,
-                                    libdir = "lib")
-            
-            
-            if(!is_empty(PosCu2) ){
-              filepath_plotly_allOH <- file.path(dsnlayerC,paste0(gsub("\\..*", "", namesortie),"_PN_PB_QOH_Obs.html"))
-              
-              htmlwidgets::saveWidget(plotly::partial_bundle(figculvert),
-                                      file = filepath_plotly_allOH,
-                                      libdir = "lib")
-            }
-          }
-          if(dir.exists(file.path(dsnlayerC,"lib"))){
-            
-            unlink(file.path(dsnlayerC,"lib"),recursive = TRUE)
-          }
-          if(file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))){
-            tabmaxq <- tab_sc %>% 
-              group_by(nom) %>% 
-              filter(abs(Q) == max(abs(min(Q)),abs(max(Q)))) %>% 
-              filter(Time == min(Time))
-            tabmaxq$nom <- as.character(tabmaxq$nom)
-            sc_sf$ID <- as.character(sc_sf$ID)
-            if("Q" %in% names(sc_sf)){
-              sc_sf <- sc_sf[,-which(names(sc_sf)=="Q")]
-            }
-            new_sc_sf <- left_join(x =sc_sf,y = tabmaxq,by=c("ID"="nom") )
-            new_sc_sf$Q <- abs(new_sc_sf$Q )
-            if(grepl("Evt", SC_list[i_filesc], fixed = TRUE)){
-              new_sc_sf$DATE <- as.character(new_sc_sf$DATE)
-            }
-          }
-          
-          
-        }
-        
       }
     }
     
+    message("  -> [GPKG] Qmax")
+    tabmaxq <- tab_sc %>% group_by(nom) %>% filter(abs(Q) == max(abs(Q))) %>% slice(1)
+    new_sc_sf <- sc_sf %>% 
+      left_join(tabmaxq %>% dplyr::select(nom, Q, DATE, Zmoy, Hmax), by = c("ID" = "nom")) %>%
+      mutate(Q = abs(Q), NomSecteur = basename(dsnlayerC))
+    st_write(new_sc_sf, file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.gpkg")), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+    file.copy(file.path(chem_routine, "C2D", Doss_Qml, "SC_Qmax.qml"), file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.qml")), overwrite = TRUE)
   }
+  
+  if (dir.exists(file.path(dsnlayerC, "lib"))) unlink(file.path(dsnlayerC, "lib"), recursive = TRUE)
+  message("[FIN] Terminé.")
+}
+plot_sc_obs_oh <- function() {
+  library(tidyverse)
+  library(sf)
+  library(plotly)
+  library(htmlwidgets)
+  library(tools)
+  
+  # --- 1. FONCTIONS UTILITAIRES ---
+  
+  get_rain_step <- function(filename, is_evt = TRUE) {
+    val <- as.numeric(gsub(".*[[:punct:]](\\d+)min([[:punct:]]|$).*", "\\1", filename))
+    if (is.na(val) || val == 0 || val > 1440) { 
+      parts <- strsplit(filename, "_")[[1]]
+      mins <- grep("^\\d+min$", parts, value = TRUE)
+      if (length(mins) > 0) {
+        val <- as.numeric(gsub("min", "", mins[1]))
+      } else {
+        val <- if (!is_evt || grepl("shyreg|spatial", filename, ignore.case = TRUE)) 15 else 1 
+      }
+    }
+    return(if(is.na(val) || val == 0) 1 else val)
+  }
+  
+  parse_time_meta <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    is_evt <- grepl("Evt", filename, fixed = TRUE)
+    duree <- 0
+    date_deb <- as.POSIXct("1900-01-01", tz="UTC")
+    
+    if (is_evt) {
+      if (length(parts) >= 5) {
+        suppressWarnings({
+          date_deb <- strptime(gsub("[^0-9]", "", parts[4]), format = "%Y%m%d%H%M", tz = "UTC")
+          h_m <- strsplit(parts[5], "h")[[1]]
+          if(length(h_m) >= 2) duree <- (as.numeric(h_m[1]) + as.numeric(substr(h_m[2], 1, 2)) / 60) * 3600
+        })
+      }
+    } else {
+      if (length(parts) >= 8) {
+        duree <- (as.numeric(parts[7]) + as.numeric(parts[8]) / 60) * 3600
+      }
+    }
+    list(date_deb = as.POSIXct(date_deb), duree = duree, is_evt = is_evt)
+  }
+  
+  create_regex_safe <- function(str) {
+    gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", str)
+  }
+  
+  parse_telemac_sortie <- function(file_path) {
+    message(paste("    [DEBUG]", Sys.time(), "- Lecture sortie:", basename(file_path)))
+    if (!file.exists(file_path)) return(NULL)
+    
+    past_ts <- NA
+    dir_path <- dirname(file_path)
+    base_name <- basename(file_path)
+    cas_name_candidate <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", base_name)
+    
+    if (cas_name_candidate == base_name) {
+      cas_name_candidate <- substr(base_name, 1, nchar(base_name) - 30)
+    }
+    
+    cas_files <- list.files(dir_path, pattern = paste0("^", create_regex_safe(cas_name_candidate)), full.names = TRUE)
+    cas_files <- cas_files[!grepl("\\.sortie$", cas_files)]
+    
+    if (length(cas_files) > 0) {
+      lines_cas <- readLines(cas_files[1], warn = FALSE)
+      ts_idx_cas <- grep("TIME STEP|PAS DE TEMPS", lines_cas, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx_cas)) {
+        raw_line <- lines_cas[ts_idx_cas]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .cas :", past_ts))
+      }
+    }
+    
+    lines <- readLines(file_path, warn = FALSE)
+    
+    if (is.na(past_ts)) {
+      ts_idx <- grep("TIME STEP|PAS DE TEMPS", lines, useBytes = TRUE, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx)) {
+        raw_line <- lines[ts_idx]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .sortie :", past_ts))
+      }
+    }
+    
+    if (is.na(past_ts)) {
+      message("    [WARN] TIME STEP introuvable. Valeur par défaut 1.0 utilisée.")
+      past_ts <- 1.0
+    }
+    
+    idx_interest <- grep("ITERATION|FLUX BOUNDARY|CULVERT|RUNOFF_SCS_CN|VOLUME IN THE DOMAIN|ADDITIONAL VOLUME", lines, useBytes = TRUE)
+    if (length(idx_interest) == 0) return(NULL)
+    ls <- lines[idx_interest]
+    
+    clean_numeric <- function(txt) {
+      txt <- gsub("[*]", "", txt)
+      suppressWarnings(as.numeric(txt))
+    }
+    
+    mots_cles <- tribble(
+      ~key, ~start, ~end,
+      "ITERATION ", 12, 22,
+      "RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61,
+      "VOLUME IN THE DOMAIN", 28, 44,
+      "ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61
+    )
+    
+    flux_raw <- grep("FLUX BOUNDARY", ls, value = TRUE, useBytes = TRUE)
+    flux_keys <- unique(sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", flux_raw))
+    
+    cul_raw <- grep("CULVERT", ls, value = TRUE, useBytes = TRUE)
+    culvert_keys <- unique(sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", cul_raw))
+    
+    extra <- tibble(key = c(flux_keys, culvert_keys)) %>%
+      mutate(start = if_else(grepl("CULVERT", key), 37, 25), end = if_else(grepl("CULVERT", key), 62, 42))
+    
+    all_keys <- bind_rows(mots_cles, extra)
+    ref_idx <- grep("ITERATION ", ls, useBytes = TRUE)
+    res <- matrix(NA, nrow = length(ref_idx), ncol = nrow(all_keys))
+    colnames(res) <- all_keys$key
+    
+    for (i in 1:nrow(mots_cles)) {
+      m <- grep(mots_cles$key[i], ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m) > 0) {
+        vals <- clean_numeric(substr(ls[m], mots_cles$start[i], mots_cles$end[i]))
+        indices <- findInterval(m, ref_idx)
+        valid <- indices > 0 & indices <= nrow(res)
+        res[indices[valid], mots_cles$key[i]] <- vals[valid]
+      }
+    }
+    
+    if (length(flux_keys) > 0) {
+      m_flux <- grep("FLUX BOUNDARY", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_flux) > 0) {
+        txt_flux <- ls[m_flux]
+        vals_flux <- clean_numeric(substr(txt_flux, 25, 42))
+        keys_flux <- sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", txt_flux)
+        
+        rows <- findInterval(m_flux, ref_idx)
+        cols <- match(keys_flux, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_flux[valid]
+      }
+    }
+    
+    if (length(culvert_keys) > 0) {
+      m_cul <- grep("CULVERT", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_cul) > 0) {
+        txt_cul <- ls[m_cul]
+        vals_cul <- clean_numeric(substr(txt_cul, 37, 62))
+        keys_cul <- sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", txt_cul)
+        
+        rows <- findInterval(m_cul, ref_idx)
+        cols <- match(keys_cul, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_cul[valid]
+      }
+    }
+    
+    df <- as.data.frame(res)
+    df$Past_Ts <- past_ts
+    df <- df[!is.na(df[, 1]), ] 
+    
+    message(paste("    [DEBUG] Parsing fini. Lignes:", nrow(df)))
+    gc() 
+    return(df)
+  }
+  
+  # --- 2. INITIALISATION ---
+  message(paste("[INFO]", Sys.time(), "Start plot_sc_obs_oh"))
+  sc_list <- list.files(dsnlayerC, pattern = "SC.txt")
+  list_sortie <- list.files(dsnlayerC, pattern = "s.sortie")
+  list_sortie <- list_sortie[!grepl("\\.txt$", list_sortie)]
+  
+  if (length(sc_list) == 0) return(message("Aucun SC.txt trouvé."))
+  
+  path_shp <- file.path(dsnlayerC, "SectControl_Select.shp")
+  sc_sf <- st_read(path_shp, quiet = TRUE) %>% mutate(ID = as.character(ID))
+  contour_aire <- st_read(file.path(dsnlayerC, "Step_Cartino2d_1_Contour.shp"), quiet = TRUE)
+  aire_val <- as.numeric(st_area(contour_aire))
+  dsnscobs <- file.path(dsnlayer, "_SectionsControles", contour$NOMPOST)
+  
+  cache_sortie <- list()      
+  cache_rain_plots <- list()  
+  
+  # --- 3. BOUCLE PRINCIPALE ---
+  
+  for (f_sc in sc_list) {
+    message(paste("----------------------------------------------------------------"))
+    message(paste("[STEP] Traitement :", f_sc))
+    racine <- sub("SC.txt$", "", f_sc)
+    racine_nom <- tools::file_path_sans_ext(f_sc)
+    
+    p_q_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Q_Obs.html"))
+    p_z_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Z_Obs.html"))
+    p_h_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_H_Obs.html"))
+    
+    if (file.exists(p_q_out) && file.exists(p_z_out)) {
+      message("  -> [SKIP] Fichiers existants.")
+      next
+    }
+    
+    meta <- parse_time_meta(f_sc)
+    f_out_match <- list_sortie[grep(racine, list_sortie)]
+    
+    if (length(f_out_match) == 0) {
+      message("  -> [WARN] .sortie introuvable.")
+      tab_out <- NULL
+    } else {
+      if (length(f_out_match) > 1) {
+        dates_out <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", f_out_match)
+        f_out_match <- f_out_match[which.max(as.POSIXct(dates_out, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
+      }
+      if (is.null(cache_sortie[[f_out_match]])) {
+        cache_sortie[[f_out_match]] <- parse_telemac_sortie(file.path(dsnlayerC, f_out_match))
+      }
+      tab_out <- cache_sortie[[f_out_match]]
+    }
+    
+    rain_objs <- NULL 
+    
+    if (!is.null(tab_out)) {
+      dir_pluie <- tryCatch(file.path(dsnPluie, contour$NOMPOST), error = function(e) NULL)
+      file_brute <- NA
+      
+      if (!is.null(dir_pluie) && dir.exists(dir_pluie)) {
+        all_brutes <- list.files(dir_pluie, pattern = "^(brute)_.*\\.txt$", full.names = TRUE)
+        if (length(all_brutes) > 0) {
+          name_sc_split <- strsplit(f_sc,"_")[[1]]
+          name_sc_brute <- do.call(paste, c(as.list(name_sc_split[1:5]), sep = "_"))
+          clean_sc <- sub("SC\\.txt$", "", name_sc_brute)
+          parts_sc <- strsplit(clean_sc, "_")[[1]]
+          
+          dur_token <- grep("^\\d+min$", parts_sc, value = TRUE)
+          if(length(dur_token) == 0) dur_token <- "IGNORE_ME" else dur_token <- dur_token[1]
+          
+          evt_token <- grep("^Evts\\d+", parts_sc, value = TRUE)
+          if(length(evt_token) == 0) evt_token <- "IGNORE_ME" else evt_token <- evt_token[1]
+          candidates <- all_brutes
+          if(evt_token== "IGNORE_ME") candidates <- NULL
+          
+          if (dur_token != "IGNORE_ME") {
+            has_dur <- grepl(paste0("_", dur_token, "([_.]|$)"), basename(candidates)) | grepl(dur_token, basename(candidates), fixed = TRUE)
+            if (any(has_dur)) candidates <- candidates[has_dur]
+          }
+          if (evt_token != "IGNORE_ME") {
+            has_evt <- grepl(evt_token, basename(candidates))
+            if (any(has_evt)) candidates <- candidates[has_evt]
+          }
+          if (length(candidates) > 0) {
+            scores <- sapply(candidates, function(cand) {
+              parts_cand <- strsplit(basename(cand), "_")[[1]]
+              sum(parts_cand %in% parts_sc)
+            })
+            file_brute <- candidates[which.max(scores)]
+            message(paste("    -> [BRUTE] Trouvé:", basename(file_brute)))
+          }
+        }
+      }
+      
+      cache_key_rain <- paste0(f_out_match, ifelse(!is.na(file_brute), basename(file_brute), "NONE"))
+      
+      if (is.null(cache_rain_plots[[cache_key_rain]])) {
+        past_ts <- tab_out$Past_Ts[1]
+        if (is.na(past_ts)) past_ts <- 1.0
+        
+        if (nrow(tab_out) > 1) {
+          pas_exp <- median(diff(tab_out[[1]]), na.rm = TRUE) * past_ts
+        } else {
+          pas_exp <- past_ts
+        }
+        if (is.na(pas_exp) || pas_exp <= 0) pas_exp <- 1.0
+        message(paste("    -> [INFO] Pas d'export:", pas_exp, "s"))
+        
+        t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        
+        acc_rain <- replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0)
+        inc_rain <- c(acc_rain[1], diff(acc_rain))
+        inc_rain[inc_rain < 0] <- 0 
+        
+        df_pluie <- data.frame(
+          Time = t_axis,
+          Intensite = inc_rain * 1000 * 3600 / pas_exp, 
+          PNette = replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * 1000 * 3600 / past_ts,
+          CumulBrut = replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0) * 1000, 
+          CumulNet = cumsum(replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * pas_exp / past_ts) * 1000,
+          NomBrut = "Pluie brute", NomNet = "Pluie nette"
+        )
+        bar_shift=0
+        if (!is.na(file_brute) && file.exists(file_brute)) {
+          tab_brute <- read.table(file_brute, header = TRUE)
+          rain_step <- get_rain_step(basename(file_brute), is_evt = meta$is_evt)
+          message(paste("    -> [BRUTE] Step:", rain_step, "min"))
+          bar_shift <- pas_exp 
+          col_val <- if("Val" %in% names(tab_brute)) "Val" else names(tab_brute)[2]
+          
+          n_out <- nrow(df_pluie)
+          if (nrow(tab_brute) >= n_out) {
+            raw_vals <- tab_brute[[col_val]][1:n_out]
+          } else {
+            raw_vals <- c(tab_brute[[col_val]], rep(0, n_out - nrow(tab_brute)))
+          }
+          
+          df_pluie$CumulBrut <- cumsum(raw_vals / rain_step)
+          df_pluie$Intensite <- raw_vals * 3600 / (pas_exp * rain_step)
+        }
+        
+        df_pluie <- df_pluie %>% filter(!is.na(Time))
+        
+        if (nrow(df_pluie) > 0) {
+          df_hyeto <- df_pluie %>% dplyr::select(Time, `Pluie brute` = Intensite, `Pluie nette` = PNette) %>%
+            pivot_longer(cols = c("Pluie brute", "Pluie nette"), names_to = "Nom", values_to = "Val")
+          df_hyeto$Nom <- factor(df_hyeto$Nom, levels = c("Pluie brute", "Pluie nette"))
+          
+          cols_hyeto <- c("Pluie brute" = "#33FFFF", "Pluie nette" = "#9933FF")
+          df_hyeto$Time[df_hyeto$Nom=="Pluie brute"]=df_hyeto$Time[df_hyeto$Nom=="Pluie brute"]+bar_shift
+          # Fix: just=1 pour aligner la barre sur la droite (fin de l'intervalle)
+          # Cela correspond visuellement à un recul d'un demi-pas si c'était centré
+          g1 <- ggplotly(ggplot(df_hyeto, aes(x = Time, y = Val, fill = Nom)) +
+                           geom_col(position = "identity", width = pas_exp) +
+                           scale_fill_manual(name="", values = cols_hyeto) + 
+                           theme_bw() + ylab("Intensité [mm/h]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          df_cumul <- df_pluie %>% dplyr::select(Time, `Cumul brut` = CumulBrut, `Cumul net` = CumulNet) %>%
+            pivot_longer(cols = c("Cumul brut", "Cumul net"), names_to = "Nom", values_to = "Val")
+          cols_cumul <- c("Cumul brut" = "#33FFFF", "Cumul net" = "#9933FF")
+          
+          g3 <- ggplotly(ggplot(df_cumul, aes(x = Time, y = Val, color = Nom)) +
+                           geom_line(size = 1.1) +
+                           scale_color_manual(name="", values = cols_cumul) +
+                           theme_bw() + ylab("Cumul [mm]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          cache_rain_plots[[cache_key_rain]] <- list(g1 = g1, g3 = g3, t_axis = t_axis)
+        } else {
+          cache_rain_plots[[cache_key_rain]] <- NULL
+        }
+      }
+      rain_objs <- cache_rain_plots[[cache_key_rain]]
+    } else {
+      rain_objs <- NULL
+    }
+    
+    if (is.null(rain_objs)) {
+      message("    [WARN] Données pluie invalides ou manquantes.")
+      rain_objs <- list(g1 = NULL, g3 = NULL, t_axis = NULL)
+    }
+    
+    message("  -> [DATA] SC + Obs")
+    cl_names <- c("nom", "numsec", "Time", "Q", "Zmoy", "Zmax", "Zmin", "Hmax", "Htot")
+    tab_sc <- read.csv(file.path(dsnlayerC, f_sc), header = FALSE, sep = "", skip = 2, col.names = cl_names)
+    tab_sc <- tab_sc %>% filter(as.numeric(Time) >= 60)
+    tab_sc[, 2:9] <- lapply(tab_sc[, 2:9], as.numeric)
+    tab_sc$DATE <- meta$date_deb + tab_sc$Time
+    tab_sc$nom <- as.character(tab_sc$nom)
+    if("Q" %in% names(sc_sf))  sc_sf =sc_sf[,-which(names(sc_sf)=="Q")]
+    tab_sc <- inner_join(tab_sc, sc_sf, by = c("nom" = "ID"))
+    
+    sc_names <- unique(tab_sc$NOM) 
+    sc_list_obs <- list.files(path = dsnscobs, full.names = TRUE)
+    
+    load_obs <- function(suffix, col_name) {
+      files_match <- unlist(lapply(sc_names, function(x) grep(paste0(x, suffix), sc_list_obs, value = TRUE)))
+      if (length(files_match) == 0) return(NULL)
+      df_list <- lapply(files_match, read.csv)
+      df_obs <- do.call(rbind, df_list)
+      df_obs$Date <- as.POSIXct(ifelse(grepl(" ", df_obs$Date), df_obs$Date, paste(df_obs$Date, "00:00:00")), tz = "UTC")
+      df_obs <- df_obs %>% filter(Date >= min(tab_sc$DATE) & Date <= max(tab_sc$DATE))
+      if (nrow(df_obs) > 0) {
+        colnames(df_obs) <- c("Date", col_name, "NOM")
+        df_obs$NOM <- paste0(df_obs$NOM, "_obs") 
+        df_obs$TYPE <- "dashed" 
+        return(df_obs)
+      }
+      return(NULL)
+    }
+    
+    obs_q <- load_obs("_Q.csv", "Q")
+    df_q_all <- bind_rows(
+      tab_sc %>% dplyr::select(Date = DATE, Q, NOM) %>% mutate(Q = abs(Q), TYPE = "solid"),
+      if (!is.null(obs_q)) obs_q %>% mutate(Q = abs(Q), TYPE = "dashed") else NULL
+    )
+    
+    obs_z <- load_obs("_Z.csv", "Z")
+    df_z_all <- bind_rows(
+      tab_sc %>% dplyr::select(Date = DATE, Z = Zmoy, NOM) %>% mutate(Z = Z, TYPE = "solid"),
+      if (!is.null(obs_z)) obs_z %>% mutate(TYPE = "dashed") else NULL
+    )
+    
+    obs_h <- load_obs("_H.csv", "H")
+    df_h_all <- bind_rows(
+      tab_sc %>% dplyr::select(Date = DATE, H = Hmax, NOM) %>% mutate(TYPE = "solid"),
+      if (!is.null(obs_h)) obs_h %>% mutate(TYPE = "dashed") else NULL
+    )
+    
+    save_master_plot <- function(df_data, y_col, y_lab, output_path, title_suffix) {
+      if (file.exists(output_path)) return()
+      df_data <- df_data %>% filter(!is.na(Date)) %>% arrange(NOM, Date)
+      if (nrow(df_data) == 0) return()
+      test_obs=df_data %>% filter(TYPE != "solid")
+      if(length(test_obs$Date )!=0){
+        g_main <- ggplot() +
+          geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                    aes(x = Date, y = .data[[y_col]], color = NOM), 
+                    linetype = "solid", size = 0.7) +
+          geom_line(data = df_data %>% filter(TYPE != "solid"), 
+                    aes(x = Date, y = .data[[y_col]], color = NOM), 
+                    linetype = "dashed", size = 0.7) +
+          theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+          theme(legend.title = element_blank())
+        
+      }else{
+        g_main <- ggplot() +
+          geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                    aes(x = Date, y = .data[[y_col]], color = NOM), 
+                    linetype = "solid", size = 0.7) +
+          theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+          theme(legend.title = element_blank())
+      }
+      
+      
+      titre <- paste0("Hyéto + ", title_suffix, " ", racine_nom, " (Pluie sur tout le bassin)")
+      
+      plots_list <- list()
+      heights <- c()
+      rows_val <- 0
+      
+      has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+      
+      if (has_rain) {
+        plots_list[[1]] <- rain_objs$g3
+        plots_list[[2]] <- rain_objs$g1
+        plots_list[[3]] <- ggplotly(g_main, dynamicTicks = TRUE)
+        heights <- c(0.1, 0.2, 0.7)
+        rows_val <- 3
+      } else {
+        plots_list[[1]] <- ggplotly(g_main, dynamicTicks = TRUE)
+        heights <- c(1)
+        rows_val <- 1
+      }
+      
+      p_final <- subplot(plots_list, nrows = rows_val, shareX = TRUE, heights = heights, titleY = TRUE) %>%
+        layout(title = list(text = titre), hovermode = "closest", legend = list(title = list(text = "")))
+      saveWidget(partial_bundle(p_final), file = output_path, selfcontained = TRUE, libdir = "lib")
+    }
+    
+    message("  -> [EXPORT] HTML Q/Z/H")
+    save_master_plot(df_q_all, "Q", "Débit [m3/s]", p_q_out, "Hydrogramme")
+    save_master_plot(df_z_all, "Z", "Côte [m]", p_z_out, "Côtes")
+    save_master_plot(df_h_all, "H", "Hauteur [m]", p_h_out, "Hauteur")
+    
+    # E. Flux et Ouvrages
+    name_case_clean <- sub("\\.cas_.*", "", basename(f_out_match))
+    p_qs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QS_Obs.html"))
+    p_qoh_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QOH_Obs.html"))
+    p_vqs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_VQS_Obs.html"))
+    
+    if (!is.null(tab_out)) {
+      # 1. Ajout VQS (Volume)
+      if (!file.exists(p_vqs_out)) {
+        if (!exists("t_axis")) t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        vol_domaine <- replace_na(tab_out[["VOLUME IN THE DOMAIN"]], 0)
+        vol_domaine <- vol_domaine - vol_domaine[1]
+        
+        vol_injecte <- cumsum(replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0)) 
+        
+        df_flux_only <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY"))
+        vol_sorties_cumul <- rep(0, nrow(tab_out))
+        if (ncol(df_flux_only) > 0) {
+          # FIX: On garde toutes les colonnes, et on nettoie les NA
+          df_flux_active <- df_flux_only %>% mutate(across(everything(), ~replace_na(., 0)))
+          q_total <- rowSums(df_flux_active, na.rm=TRUE)
+          vol_sorties_cumul <- cumsum(-q_total * pas_exp)
+        }
+        
+        df_vol <- data.frame(
+          Time = t_axis,
+          Injecte = vol_injecte,
+          Domaine = vol_domaine,
+          `Domaine + Sorties` = vol_domaine + vol_sorties_cumul,
+          check.names = FALSE
+        ) %>% pivot_longer(-Time, names_to = "Variable", values_to = "Volume")
+        
+        # Ajout des volumes individuels des sorties (FIX: df_flux_active existe maintenant toujours)
+        if (exists("df_flux_active") && ncol(df_flux_active) > 0) {
+          for(col_name in colnames(df_flux_active)) {
+            clean_name <- sub("FLUX BOUNDARY", "Sortie", col_name)
+            vol_indiv <- cumsum(-df_flux_active[[col_name]] * pas_exp)
+            df_temp <- data.frame(Time = t_axis, Variable = clean_name, Volume = vol_indiv)
+            df_vol <- bind_rows(df_vol, df_temp)
+          }
+        }
+        
+        g_vol <- ggplot(df_vol, aes(x = Time, y = Volume, color = Variable)) +
+          geom_line() + theme_bw() + labs(y = "Volume [m3]") + 
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        df_qs_total <- data.frame(Time = t_axis, Q = if(exists("q_total")) -q_total else 0)
+        g_qs_total <- ggplot(df_qs_total, aes(x=Time, y=Q, color="Débit Sortie Total")) + 
+          geom_line() + 
+          scale_color_manual(values=c("Débit Sortie Total"="red")) +
+          theme_bw() + ylab("Débit Sortie Total [m3/s]") +
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        plots_vqs <- list()
+        if (!is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")) {
+          plots_vqs <- list(rain_objs$g3, ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 3, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        } else {
+          plots_vqs <- list(ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        }
+        saveWidget(partial_bundle(p_vqs), file = p_vqs_out, selfcontained = TRUE, libdir = "lib")
+      }
+      
+      df_flux <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY|CULVERT"))
+      keep_cols <- sapply(df_flux, function(x) !all(is.na(x)))
+      df_flux <- df_flux[, keep_cols, drop=FALSE]
+      
+      if (ncol(df_flux) > 0) {
+        if (!exists("t_axis")) t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        df_long <- df_flux %>% mutate(Time = t_axis) %>% 
+          pivot_longer(-Time) %>% filter(!is.na(Time)) 
+        
+        if (!file.exists(p_qs_out) && any(grepl("FLUX", df_long$name))) {
+          g_qs <- ggplot(df_long %>% filter(grepl("FLUX", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
+          }
+          p_qs <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Sorties -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qs), file = p_qs_out, selfcontained = TRUE, libdir = "lib")
+        }
+        
+        if (!file.exists(p_qoh_out) && any(grepl("CULVERT", df_long$name))) {
+          g_qoh <- ggplot(df_long %>% filter(grepl("CULVERT", name)), aes(Time, value, color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
+          }
+          p_qoh <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Ouvrages -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qoh), file = p_qoh_out, selfcontained = TRUE, libdir = "lib")
+        }
+      }
+    }
+    
+    message("  -> [GPKG] Qmax")
+    tabmaxq <- tab_sc %>% group_by(nom) %>% filter(abs(Q) == max(abs(Q))) %>% slice(1)
+    new_sc_sf <- sc_sf %>% 
+      left_join(tabmaxq %>% dplyr::select(nom, Q, DATE, Zmoy, Hmax), by = c("ID" = "nom")) %>%
+      mutate(Q = abs(Q), NomSecteur = basename(dsnlayerC))
+    st_write(new_sc_sf, file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.gpkg")), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+    file.copy(file.path(chem_routine, "C2D", Doss_Qml, "SC_Qmax.qml"), file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.qml")), overwrite = TRUE)
+  }
+  
+  if (dir.exists(file.path(dsnlayerC, "lib"))) unlink(file.path(dsnlayerC, "lib"), recursive = TRUE)
+  message("[FIN] Terminé.")
+}
+plot_sc_obs_oh <- function() {
+  library(tidyverse)
+  library(sf)
+  library(plotly)
+  library(htmlwidgets)
+  library(tools)
+  
+  # --- 1. FONCTIONS UTILITAIRES ---
+  
+  get_rain_step <- function(filename, is_evt = TRUE) {
+    val <- as.numeric(gsub(".*[[:punct:]](\\d+)min([[:punct:]]|$).*", "\\1", filename))
+    if (is.na(val) || val == 0 || val > 1440) { 
+      parts <- strsplit(filename, "_")[[1]]
+      mins <- grep("^\\d+min$", parts, value = TRUE)
+      if (length(mins) > 0) {
+        val <- as.numeric(gsub("min", "", mins[1]))
+      } else {
+        val <- if (!is_evt || grepl("shyreg|spatial", filename, ignore.case = TRUE)) 15 else 1 
+      }
+    }
+    return(if(is.na(val) || val == 0) 1 else val)
+  }
+  
+  parse_time_meta <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    is_evt <- grepl("Evt", filename, fixed = TRUE)
+    duree <- 0
+    date_deb <- as.POSIXct("1900-01-01", tz="UTC")
+    
+    if (is_evt) {
+      if (length(parts) >= 5) {
+        suppressWarnings({
+          date_deb <- strptime(gsub("[^0-9]", "", parts[4]), format = "%Y%m%d%H%M", tz = "UTC")
+          h_m <- strsplit(parts[5], "h")[[1]]
+          if(length(h_m) >= 2) duree <- (as.numeric(h_m[1]) + as.numeric(substr(h_m[2], 1, 2)) / 60) * 3600
+        })
+      }
+    } else {
+      if (length(parts) >= 8) {
+        duree <- (as.numeric(parts[7]) + as.numeric(parts[8]) / 60) * 3600
+      }
+    }
+    list(date_deb = as.POSIXct(date_deb), duree = duree, is_evt = is_evt)
+  }
+  
+  create_regex_safe <- function(str) {
+    gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", str)
+  }
+  
+  parse_telemac_sortie <- function(file_path) {
+    message(paste("    [DEBUG]", Sys.time(), "- Lecture sortie:", basename(file_path)))
+    if (!file.exists(file_path)) return(NULL)
+    
+    past_ts <- NA
+    dir_path <- dirname(file_path)
+    base_name <- basename(file_path)
+    cas_name_candidate <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", base_name)
+    
+    if (cas_name_candidate == base_name) {
+      cas_name_candidate <- substr(base_name, 1, nchar(base_name) - 30)
+    }
+    
+    cas_files <- list.files(dir_path, pattern = paste0("^", create_regex_safe(cas_name_candidate)), full.names = TRUE)
+    cas_files <- cas_files[!grepl("\\.sortie$", cas_files)]
+    
+    if (length(cas_files) > 0) {
+      lines_cas <- readLines(cas_files[1], warn = FALSE)
+      ts_idx_cas <- grep("TIME STEP|PAS DE TEMPS", lines_cas, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx_cas)) {
+        raw_line <- lines_cas[ts_idx_cas]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .cas :", past_ts))
+      }
+    }
+    
+    lines <- readLines(file_path, warn = FALSE)
+    
+    if (is.na(past_ts)) {
+      ts_idx <- grep("TIME STEP|PAS DE TEMPS", lines, useBytes = TRUE, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx)) {
+        raw_line <- lines[ts_idx]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .sortie :", past_ts))
+      }
+    }
+    
+    if (is.na(past_ts)) {
+      message("    [WARN] TIME STEP introuvable. Valeur par défaut 1.0 utilisée.")
+      past_ts <- 1.0
+    }
+    
+    idx_interest <- grep("ITERATION|FLUX BOUNDARY|CULVERT|RUNOFF_SCS_CN|VOLUME IN THE DOMAIN|ADDITIONAL VOLUME", lines, useBytes = TRUE)
+    if (length(idx_interest) == 0) return(NULL)
+    ls <- lines[idx_interest]
+    
+    clean_numeric <- function(txt) {
+      txt <- gsub("[*]", "", txt)
+      suppressWarnings(as.numeric(txt))
+    }
+    
+    mots_cles <- tribble(
+      ~key, ~start, ~end,
+      "ITERATION ", 12, 22,
+      "RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61,
+      "VOLUME IN THE DOMAIN", 28, 44,
+      "ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61
+    )
+    
+    flux_raw <- grep("FLUX BOUNDARY", ls, value = TRUE, useBytes = TRUE)
+    flux_keys <- unique(sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", flux_raw))
+    
+    cul_raw <- grep("CULVERT", ls, value = TRUE, useBytes = TRUE)
+    culvert_keys <- unique(sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", cul_raw))
+    
+    extra <- tibble(key = c(flux_keys, culvert_keys)) %>%
+      mutate(start = if_else(grepl("CULVERT", key), 37, 62), end = if_else(grepl("CULVERT", key), 62, 42)) # Fix intervalle si nécessaire
+    
+    all_keys <- bind_rows(mots_cles, extra)
+    ref_idx <- grep("ITERATION ", ls, useBytes = TRUE)
+    res <- matrix(NA, nrow = length(ref_idx), ncol = nrow(all_keys))
+    colnames(res) <- all_keys$key
+    
+    for (i in 1:nrow(mots_cles)) {
+      m <- grep(mots_cles$key[i], ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m) > 0) {
+        vals <- clean_numeric(substr(ls[m], mots_cles$start[i], mots_cles$end[i]))
+        indices <- findInterval(m, ref_idx)
+        valid <- indices > 0 & indices <= nrow(res)
+        res[indices[valid], mots_cles$key[i]] <- vals[valid]
+      }
+    }
+    
+    if (length(flux_keys) > 0) {
+      m_flux <- grep("FLUX BOUNDARY", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_flux) > 0) {
+        txt_flux <- ls[m_flux]
+        vals_flux <- clean_numeric(substr(txt_flux, 25, 42))
+        keys_flux <- sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", txt_flux)
+        
+        rows <- findInterval(m_flux, ref_idx)
+        cols <- match(keys_flux, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_flux[valid]
+      }
+    }
+    
+    if (length(culvert_keys) > 0) {
+      m_cul <- grep("CULVERT", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_cul) > 0) {
+        txt_cul <- ls[m_cul]
+        vals_cul <- clean_numeric(substr(txt_cul, 37, 62))
+        keys_cul <- sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", txt_cul)
+        
+        rows <- findInterval(m_cul, ref_idx)
+        cols <- match(keys_cul, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_cul[valid]
+      }
+    }
+    
+    df <- as.data.frame(res)
+    df$Past_Ts <- past_ts
+    df <- df[!is.na(df[, 1]), ] 
+    
+    message(paste("    [DEBUG] Parsing fini. Lignes:", nrow(df)))
+    gc() 
+    return(df)
+  }
+  
+  # --- 2. INITIALISATION ---
+  message(paste("[INFO]", Sys.time(), "Start plot_sc_obs_oh"))
+  sc_list <- list.files(dsnlayerC, pattern = "SC.txt")
+  list_sortie <- list.files(dsnlayerC, pattern = "s.sortie")
+  list_sortie <- list_sortie[!grepl("\\.txt$", list_sortie)]
+  
+  # Construction d'une liste unique de tous les scénarios (racines) détectés
+  all_cases <- list()
+  
+  # 1. Scénarios issus des SC.txt
+  for (f_sc in sc_list) {
+    rac <- sub("SC\\.txt$", "", f_sc)
+    out_matches <- list_sortie[grep(create_regex_safe(rac), list_sortie)]
+    all_cases[[rac]] <- list(f_sc = f_sc, f_outs = out_matches)
+  }
+  
+  # 2. Ajout des scénarios orphelins (qui n'ont qu'un .sortie et pas de SC.txt)
+  for (f_out in list_sortie) {
+    already_matched <- FALSE
+    for (cas in all_cases) {
+      if (f_out %in% cas$f_outs) already_matched <- TRUE
+    }
+    if (!already_matched) {
+      rac <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", f_out)
+      rac <- sub("\\.sortie$", "", rac)
+      if(!endsWith(rac, "_")) rac <- paste0(rac, "_")
+      if (is.null(all_cases[[rac]])) {
+        all_cases[[rac]] <- list(f_sc = NULL, f_outs = f_out)
+      } else {
+        all_cases[[rac]]$f_outs <- unique(c(all_cases[[rac]]$f_outs, f_out))
+      }
+    }
+  }
+  
+  if (length(all_cases) == 0) return(message("Aucun SC.txt ni fichier .sortie trouvé."))
+  
+  path_shp <- file.path(dsnlayerC, "SectControl_Select.shp")
+  if(file.exists(path_shp)) sc_sf <- st_read(path_shp, quiet = TRUE) %>% mutate(ID = as.character(ID))
+  
+  contour_aire <- st_read(file.path(dsnlayerC, "Step_Cartino2d_1_Contour.shp"), quiet = TRUE)
+  aire_val <- as.numeric(st_area(contour_aire))
+  dsnscobs <- file.path(dsnlayer, "_SectionsControles", contour$NOMPOST)
+  
+  cache_sortie <- list()      
+  cache_rain_plots <- list()  
+  
+  # --- 3. BOUCLE PRINCIPALE ---
+  
+  for (racine in names(all_cases)) {
+    message(paste("----------------------------------------------------------------"))
+    message(paste("[STEP] Traitement Racine :", racine))
+    
+    f_sc <- all_cases[[racine]]$f_sc
+    f_out_match <- all_cases[[racine]]$f_outs
+    
+    has_sc <- !is.null(f_sc) && file.exists(file.path(dsnlayerC, f_sc))
+    pseudo_f_sc <- if (has_sc) f_sc else paste0(racine, "SC.txt") # Utilisé pour le parsing nom
+    racine_nom <- if (has_sc) tools::file_path_sans_ext(f_sc) else racine
+    
+    if (length(f_out_match) > 1) {
+      dates_out <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", f_out_match)
+      f_out_match <- f_out_match[which.max(as.POSIXct(dates_out, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
+    }
+    
+    if (length(f_out_match) == 0) {
+      message("  -> [WARN] .sortie introuvable pour ce cas.")
+      tab_out <- NULL
+    } else {
+      if (is.null(cache_sortie[[f_out_match]])) {
+        cache_sortie[[f_out_match]] <- parse_telemac_sortie(file.path(dsnlayerC, f_out_match))
+      }
+      tab_out <- cache_sortie[[f_out_match]]
+    }
+    
+    meta <- parse_time_meta(pseudo_f_sc)
+    rain_objs <- NULL 
+    
+    if (!is.null(tab_out)) {
+      dir_pluie <- tryCatch(file.path(dsnPluie, contour$NOMPOST), error = function(e) NULL)
+      file_brute <- NA
+      
+      if (!is.null(dir_pluie) && dir.exists(dir_pluie)) {
+        all_brutes <- list.files(dir_pluie, pattern = "^(brute)_.*\\.txt$", full.names = TRUE)
+        if (length(all_brutes) > 0) {
+          name_sc_split <- strsplit(pseudo_f_sc,"_")[[1]]
+          name_sc_brute <- do.call(paste, c(as.list(name_sc_split[1:5]), sep = "_"))
+          clean_sc <- sub("SC\\.txt$", "", name_sc_brute)
+          parts_sc <- strsplit(clean_sc, "_")[[1]]
+          
+          dur_token <- grep("^\\d+min$", parts_sc, value = TRUE)
+          if(length(dur_token) == 0) dur_token <- "IGNORE_ME" else dur_token <- dur_token[1]
+          
+          evt_token <- grep("^Evts\\d+", parts_sc, value = TRUE)
+          if(length(evt_token) == 0) evt_token <- "IGNORE_ME" else evt_token <- evt_token[1]
+          candidates <- all_brutes
+          if(evt_token== "IGNORE_ME") candidates <- NULL
+          
+          if (dur_token != "IGNORE_ME") {
+            has_dur <- grepl(paste0("_", dur_token, "([_.]|$)"), basename(candidates)) | grepl(dur_token, basename(candidates), fixed = TRUE)
+            if (any(has_dur)) candidates <- candidates[has_dur]
+          }
+          if (evt_token != "IGNORE_ME") {
+            has_evt <- grepl(evt_token, basename(candidates))
+            if (any(has_evt)) candidates <- candidates[has_evt]
+          }
+          if (length(candidates) > 0) {
+            scores <- sapply(candidates, function(cand) {
+              parts_cand <- strsplit(basename(cand), "_")[[1]]
+              sum(parts_cand %in% parts_sc)
+            })
+            file_brute <- candidates[which.max(scores)]
+            message(paste("    -> [BRUTE] Trouvé:", basename(file_brute)))
+          }
+        }
+      }
+      
+      cache_key_rain <- paste0(f_out_match, ifelse(!is.na(file_brute), basename(file_brute), "NONE"))
+      
+      if (is.null(cache_rain_plots[[cache_key_rain]])) {
+        past_ts <- tab_out$Past_Ts[1]
+        if (is.na(past_ts)) past_ts <- 1.0
+        
+        if (nrow(tab_out) > 1) {
+          pas_exp <- median(diff(tab_out[[1]]), na.rm = TRUE) * past_ts
+        } else {
+          pas_exp <- past_ts
+        }
+        if (is.na(pas_exp) || pas_exp <= 0) pas_exp <- 1.0
+        message(paste("    -> [INFO] Pas d'export:", pas_exp, "s"))
+        
+        t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        
+        acc_rain <- replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0)
+        inc_rain <- c(acc_rain[1], diff(acc_rain))
+        inc_rain[inc_rain < 0] <- 0 
+        
+        df_pluie <- data.frame(
+          Time = t_axis,
+          Intensite = inc_rain * 1000 * 3600 / pas_exp, 
+          PNette = replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * 1000 * 3600 / past_ts,
+          CumulBrut = replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0) * 1000, 
+          CumulNet = cumsum(replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * pas_exp / past_ts) * 1000,
+          NomBrut = "Pluie brute", NomNet = "Pluie nette"
+        )
+        bar_shift=0
+        if (!is.na(file_brute) && file.exists(file_brute)) {
+          tab_brute <- read.table(file_brute, header = TRUE)
+          rain_step <- get_rain_step(basename(file_brute), is_evt = meta$is_evt)
+          message(paste("    -> [BRUTE] Step:", rain_step, "min"))
+          bar_shift <- pas_exp 
+          col_val <- if("Val" %in% names(tab_brute)) "Val" else names(tab_brute)[2]
+          
+          n_out <- nrow(df_pluie)
+          if (nrow(tab_brute) >= n_out) {
+            raw_vals <- tab_brute[[col_val]][1:n_out]
+          } else {
+            raw_vals <- c(tab_brute[[col_val]], rep(0, n_out - nrow(tab_brute)))
+          }
+          
+          df_pluie$CumulBrut <- cumsum(raw_vals / rain_step)
+          df_pluie$Intensite <- raw_vals * 3600 / (pas_exp * rain_step)
+        }
+        
+        df_pluie <- df_pluie %>% filter(!is.na(Time))
+        
+        if (nrow(df_pluie) > 0) {
+          df_hyeto <- df_pluie %>% dplyr::select(Time, `Pluie brute` = Intensite, `Pluie nette` = PNette) %>%
+            pivot_longer(cols = c("Pluie brute", "Pluie nette"), names_to = "Nom", values_to = "Val")
+          df_hyeto$Nom <- factor(df_hyeto$Nom, levels = c("Pluie brute", "Pluie nette"))
+          
+          cols_hyeto <- c("Pluie brute" = "#33FFFF", "Pluie nette" = "#9933FF")
+          df_hyeto$Time[df_hyeto$Nom=="Pluie brute"]=df_hyeto$Time[df_hyeto$Nom=="Pluie brute"]+bar_shift
+          
+          g1 <- ggplotly(ggplot(df_hyeto, aes(x = Time, y = Val, fill = Nom)) +
+                           geom_col(position = "identity", width = pas_exp) +
+                           scale_fill_manual(name="", values = cols_hyeto) + 
+                           theme_bw() + ylab("Intensité [mm/h]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          df_cumul <- df_pluie %>% dplyr::select(Time, `Cumul brut` = CumulBrut, `Cumul net` = CumulNet) %>%
+            pivot_longer(cols = c("Cumul brut", "Cumul net"), names_to = "Nom", values_to = "Val")
+          cols_cumul <- c("Cumul brut" = "#33FFFF", "Cumul net" = "#9933FF")
+          
+          g3 <- ggplotly(ggplot(df_cumul, aes(x = Time, y = Val, color = Nom)) +
+                           geom_line(size = 1.1) +
+                           scale_color_manual(name="", values = cols_cumul) +
+                           theme_bw() + ylab("Cumul [mm]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          cache_rain_plots[[cache_key_rain]] <- list(g1 = g1, g3 = g3, t_axis = t_axis)
+        } else {
+          cache_rain_plots[[cache_key_rain]] <- NULL
+        }
+      }
+      rain_objs <- cache_rain_plots[[cache_key_rain]]
+    } else {
+      rain_objs <- NULL
+    }
+    
+    if (is.null(rain_objs)) {
+      message("    [WARN] Données pluie invalides ou manquantes.")
+      rain_objs <- list(g1 = NULL, g3 = NULL, t_axis = NULL)
+    }
+    
+    # ---------------------------------------------------------
+    # PARTIE Q, Z, H (Dépend strictement de la présence de SC.txt)
+    # ---------------------------------------------------------
+    if (has_sc) {
+      message("  -> [DATA] SC + Obs")
+      cl_names <- c("nom", "numsec", "Time", "Q", "Zmoy", "Zmax", "Zmin", "Hmax", "Htot")
+      tab_sc <- read.csv(file.path(dsnlayerC, f_sc), header = FALSE, sep = "", skip = 2, col.names = cl_names)
+      tab_sc <- tab_sc %>% filter(as.numeric(Time) >= 60)
+      tab_sc[, 2:9] <- lapply(tab_sc[, 2:9], as.numeric)
+      tab_sc$DATE <- meta$date_deb + tab_sc$Time
+      tab_sc$nom <- as.character(tab_sc$nom)
+      if("Q" %in% names(sc_sf))  sc_sf =sc_sf[,-which(names(sc_sf)=="Q")]
+      tab_sc <- inner_join(tab_sc, sc_sf, by = c("nom" = "ID"))
+      
+      sc_names <- unique(tab_sc$NOM) 
+      sc_list_obs <- list.files(path = dsnscobs, full.names = TRUE)
+      
+      load_obs <- function(suffix, col_name) {
+        files_match <- unlist(lapply(sc_names, function(x) grep(paste0(x, suffix), sc_list_obs, value = TRUE)))
+        if (length(files_match) == 0) return(NULL)
+        df_list <- lapply(files_match, read.csv)
+        df_obs <- do.call(rbind, df_list)
+        df_obs$Date <- as.POSIXct(ifelse(grepl(" ", df_obs$Date), df_obs$Date, paste(df_obs$Date, "00:00:00")), tz = "UTC")
+        df_obs <- df_obs %>% filter(Date >= min(tab_sc$DATE) & Date <= max(tab_sc$DATE))
+        if (nrow(df_obs) > 0) {
+          colnames(df_obs) <- c("Date", col_name, "NOM")
+          df_obs$NOM <- paste0(df_obs$NOM, "_obs") 
+          df_obs$TYPE <- "dashed" 
+          return(df_obs)
+        }
+        return(NULL)
+      }
+      
+      obs_q <- load_obs("_Q.csv", "Q")
+      df_q_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, Q, NOM) %>% mutate(Q = abs(Q), TYPE = "solid"),
+        if (!is.null(obs_q)) obs_q %>% mutate(Q = abs(Q), TYPE = "dashed") else NULL
+      )
+      
+      obs_z <- load_obs("_Z.csv", "Z")
+      df_z_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, Z = Zmax, NOM) %>% mutate(Z = Z, TYPE = "solid"),
+        if (!is.null(obs_z)) obs_z %>% mutate(TYPE = "dashed") else NULL
+      )
+      # FIX: Remplacement des 0 par NA dans la colonne Z
+      df_z_all$Z[df_z_all$Z == 0] <- NA
+      
+      obs_h <- load_obs("_H.csv", "H")
+      df_h_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, H = Hmax, NOM) %>% mutate(TYPE = "solid"),
+        if (!is.null(obs_h)) obs_h %>% mutate(TYPE = "dashed") else NULL
+      )
+      
+      save_master_plot <- function(df_data, y_col, y_lab, output_path, title_suffix) {
+        if (file.exists(output_path)) return()
+        df_data <- df_data %>% filter(!is.na(Date)) %>% arrange(NOM, Date)
+        if (nrow(df_data) == 0) return()
+        test_obs = df_data %>% filter(TYPE != "solid")
+        
+        # S'assurer qu'il n'y a que des données non-NA avant le tracé
+        df_data <- df_data %>% filter(!is.na(.data[[y_col]]))
+        
+        if(length(test_obs$Date) != 0) {
+          g_main <- ggplot() +
+            geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "solid", size = 0.7) +
+            geom_line(data = df_data %>% filter(TYPE != "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "dashed", size = 0.7) +
+            theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+            theme(legend.title = element_blank())
+        } else {
+          g_main <- ggplot() +
+            geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "solid", size = 0.7) +
+            theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+            theme(legend.title = element_blank())
+        }
+        
+        titre <- paste0("Hyéto + ", title_suffix, " ", racine_nom, " (Pluie sur tout le bassin)")
+        
+        plots_list <- list()
+        heights <- c()
+        rows_val <- 0
+        
+        has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+        
+        if (has_rain) {
+          plots_list[[1]] <- rain_objs$g3
+          plots_list[[2]] <- rain_objs$g1
+          plots_list[[3]] <- ggplotly(g_main, dynamicTicks = TRUE)
+          heights <- c(0.1, 0.2, 0.7)
+          rows_val <- 3
+        } else {
+          plots_list[[1]] <- ggplotly(g_main, dynamicTicks = TRUE)
+          heights <- c(1)
+          rows_val <- 1
+        }
+        
+        p_final <- subplot(plots_list, nrows = rows_val, shareX = TRUE, heights = heights, titleY = TRUE) %>%
+          layout(title = list(text = titre), hovermode = "closest", legend = list(title = list(text = "")))
+        saveWidget(partial_bundle(p_final), file = output_path, selfcontained = TRUE, libdir = "lib")
+      }
+      
+      message("  -> [EXPORT] HTML Q/Z/H")
+      p_q_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Q_Obs.html"))
+      p_z_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Z_Obs.html"))
+      p_h_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_H_Obs.html"))
+      
+      save_master_plot(df_q_all, "Q", "Débit [m3/s]", p_q_out, "Hydrogramme")
+      save_master_plot(df_z_all, "Z", "Côte [m]", p_z_out, "Côtes")
+      save_master_plot(df_h_all, "H", "Hauteur [m]", p_h_out, "Hauteur")
+      
+      message("  -> [GPKG] Qmax")
+      tabmaxq <- tab_sc %>% group_by(nom) %>% filter(abs(Q) == max(abs(Q))) %>% slice(1)
+      new_sc_sf <- sc_sf %>% 
+        left_join(tabmaxq %>% dplyr::select(nom, Q, DATE, Zmoy, Hmax), by = c("ID" = "nom")) %>%
+        mutate(Q = abs(Q), NomSecteur = basename(dsnlayerC))
+      st_write(new_sc_sf, file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.gpkg")), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+      file.copy(file.path(chem_routine, "C2D", Doss_Qml, "SC_Qmax.qml"), file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.qml")), overwrite = TRUE)
+    } else {
+      message("  -> [INFO] Pas de fichier SC.txt, graphes Q, Z, H ignorés.")
+    }
+    
+    # ---------------------------------------------------------
+    # PARTIE SORTIES: FLUX, OUVRAGES ET VOLUMES (.sortie direct)
+    # ---------------------------------------------------------
+    if (!is.null(tab_out)) {
+      name_case_clean <- sub("\\.cas_.*", "", basename(f_out_match[1]))
+      p_qs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QS_Obs.html"))
+      p_qoh_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QOH_Obs.html"))
+      p_vqs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_VQS_Obs.html"))
+      
+      if (!exists("t_axis") || is.null(t_axis)) t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+      
+      # 1. Ajout VQS (Volume)
+      if (!file.exists(p_vqs_out)) {
+        vol_domaine <- replace_na(tab_out[["VOLUME IN THE DOMAIN"]], 0)
+        vol_domaine <- vol_domaine - vol_domaine[1]
+        
+        # Le volume de la source imprimé dans la sortie Telemac est celui d'1 seul pas de temps de calcul (past_ts)
+        rate_injecte <- replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / past_ts
+        vol_injecte <- cumsum(rate_injecte * pas_exp) 
+        
+        df_flux_only <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY"))
+        vol_sorties_cumul <- rep(0, nrow(tab_out))
+        q_total <- rep(0, nrow(tab_out))
+        
+        if (ncol(df_flux_only) > 0) {
+          df_flux_active <- df_flux_only %>% mutate(across(everything(), ~replace_na(., 0)))
+          q_total <- rowSums(df_flux_active, na.rm=TRUE)
+          # FIX : On utilise -q_total exactement comme l'ancien code (-TimeStep*sum(...))
+          # Les flux sortants (<0 dans Telemac) deviennent des volumes positifs
+          # ce qui maintient l'équilibre physique exact pour Domaine + Sorties
+          vol_sorties_cumul <- cumsum(-q_total * pas_exp)
+        }
+        
+        df_vol <- data.frame(
+          Time = t_axis,
+          Injecte = vol_injecte,
+          Domaine = vol_domaine,
+          `Domaine + Sorties` = vol_domaine + vol_sorties_cumul,
+          check.names = FALSE
+        ) %>% pivot_longer(-Time, names_to = "Variable", values_to = "Volume")
+        
+        # Ajout des volumes individuels des sorties
+        if (exists("df_flux_active") && ncol(df_flux_active) > 0) {
+          for(col_name in colnames(df_flux_active)) {
+            clean_name <- sub("FLUX BOUNDARY", "Sortie", col_name)
+            # Volume individuel (sortant = positif grâce au signe -)
+            vol_indiv <- cumsum(-df_flux_active[[col_name]] * pas_exp)
+            df_temp <- data.frame(Time = t_axis, Variable = clean_name, Volume = vol_indiv)
+            df_vol <- bind_rows(df_vol, df_temp)
+          }
+        }
+        
+        g_vol <- ggplot(df_vol, aes(x = Time, y = Volume, color = Variable)) +
+          geom_line() + theme_bw() + labs(y = "Volume [m3]") + 
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        # Graphique débit total de sortie (conservé en valeur absolue pour le visuel graphique)
+        df_qs_total <- data.frame(Time = t_axis, Q = abs(q_total))
+        g_qs_total <- ggplot(df_qs_total, aes(x=Time, y=Q, color="Débit Sortie Total")) + 
+          geom_line() + 
+          scale_color_manual(values=c("Débit Sortie Total"="red")) +
+          theme_bw() + ylab("Débit Sortie Total [m3/s]") +
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        plots_vqs <- list()
+        if (!is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")) {
+          plots_vqs <- list(rain_objs$g3, ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 3, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        } else {
+          plots_vqs <- list(ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        }
+        saveWidget(partial_bundle(p_vqs), file = p_vqs_out, selfcontained = TRUE, libdir = "lib")
+      }
+      
+      # 2. Flux and Culverts (QS, QOH)
+      df_flux <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY|CULVERT"))
+      keep_cols <- sapply(df_flux, function(x) !all(is.na(x)))
+      df_flux <- df_flux[, keep_cols, drop=FALSE]
+      
+      if (ncol(df_flux) > 0) {
+        df_long <- df_flux %>% mutate(Time = t_axis) %>% 
+          pivot_longer(-Time) %>% filter(!is.na(Time)) 
+        
+        if (!file.exists(p_qs_out) && any(grepl("FLUX", df_long$name))) {
+          # Valeur absolue uniquement pour l'affichage graphique du débit !
+          g_qs <- ggplot(df_long %>% filter(grepl("FLUX", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
+          }
+          p_qs <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Sorties -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qs), file = p_qs_out, selfcontained = TRUE, libdir = "lib")
+        }
+        
+        if (!file.exists(p_qoh_out) && any(grepl("CULVERT", df_long$name))) {
+          g_qoh <- ggplot(df_long %>% filter(grepl("CULVERT", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
+          }
+          p_qoh <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Ouvrages -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qoh), file = p_qoh_out, selfcontained = TRUE, libdir = "lib")
+        }
+      }
+    }
+  }
+  
+  if (dir.exists(file.path(dsnlayerC, "lib"))) unlink(file.path(dsnlayerC, "lib"), recursive = TRUE)
+  message("[FIN] Terminé.")
+}
+plot_sc_obs_oh <- function() {
+  library(tidyverse)
+  library(sf)
+  library(plotly)
+  library(htmlwidgets)
+  library(tools)
+  
+  # --- 1. FONCTIONS UTILITAIRES ---
+  
+  get_rain_step <- function(filename, is_evt = TRUE) {
+    val <- as.numeric(gsub(".*[[:punct:]](\\d+)min([[:punct:]]|$).*", "\\1", filename))
+    if (is.na(val) || val == 0 || val > 1440) { 
+      parts <- strsplit(filename, "_")[[1]]
+      mins <- grep("^\\d+min$", parts, value = TRUE)
+      if (length(mins) > 0) {
+        val <- as.numeric(gsub("min", "", mins[1]))
+      } else {
+        val <- if (!is_evt || grepl("shyreg|spatial", filename, ignore.case = TRUE)) 15 else 1 
+      }
+    }
+    return(if(is.na(val) || val == 0) 1 else val)
+  }
+  
+  parse_time_meta <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    is_evt <- grepl("Evt", filename, fixed = TRUE)
+    duree <- 0
+    date_deb <- as.POSIXct("1900-01-01", tz="UTC")
+    
+    if (is_evt) {
+      if (length(parts) >= 5) {
+        suppressWarnings({
+          date_deb <- strptime(gsub("[^0-9]", "", parts[4]), format = "%Y%m%d%H%M", tz = "UTC")
+          h_m <- strsplit(parts[5], "h")[[1]]
+          if(length(h_m) >= 2) duree <- (as.numeric(h_m[1]) + as.numeric(substr(h_m[2], 1, 2)) / 60) * 3600
+        })
+      }
+    } else {
+      if (length(parts) >= 8) {
+        duree <- (as.numeric(parts[7]) + as.numeric(parts[8]) / 60) * 3600
+      }
+    }
+    list(date_deb = as.POSIXct(date_deb), duree = duree, is_evt = is_evt)
+  }
+  
+  create_regex_safe <- function(str) {
+    gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", str)
+  }
+  
+  parse_telemac_sortie <- function(file_path) {
+    message(paste("    [DEBUG]", Sys.time(), "- Lecture sortie:", basename(file_path)))
+    if (!file.exists(file_path)) return(NULL)
+    
+    past_ts <- NA
+    dir_path <- dirname(file_path)
+    base_name <- basename(file_path)
+    cas_name_candidate <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", base_name)
+    
+    if (cas_name_candidate == base_name) {
+      cas_name_candidate <- substr(base_name, 1, nchar(base_name) - 30)
+    }
+    
+    cas_files <- list.files(dir_path, pattern = paste0("^", create_regex_safe(cas_name_candidate)), full.names = TRUE)
+    cas_files <- cas_files[!grepl("\\.sortie$", cas_files)]
+    
+    if (length(cas_files) > 0) {
+      lines_cas <- readLines(cas_files[1], warn = FALSE)
+      ts_idx_cas <- grep("TIME STEP|PAS DE TEMPS", lines_cas, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx_cas)) {
+        raw_line <- lines_cas[ts_idx_cas]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .cas :", past_ts))
+      }
+    }
+    
+    lines <- readLines(file_path, warn = FALSE)
+    
+    if (is.na(past_ts)) {
+      ts_idx <- grep("TIME STEP|PAS DE TEMPS", lines, useBytes = TRUE, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx)) {
+        raw_line <- lines[ts_idx]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .sortie :", past_ts))
+      }
+    }
+    
+    if (is.na(past_ts)) {
+      message("    [WARN] TIME STEP introuvable. Valeur par défaut 1.0 utilisée.")
+      past_ts <- 1.0
+    }
+    
+    idx_interest <- grep("ITERATION|FLUX BOUNDARY|CULVERT|RUNOFF_SCS_CN|VOLUME IN THE DOMAIN|ADDITIONAL VOLUME", lines, useBytes = TRUE)
+    if (length(idx_interest) == 0) return(NULL)
+    ls <- lines[idx_interest]
+    
+    clean_numeric <- function(txt) {
+      txt <- gsub("[*]", "", txt)
+      suppressWarnings(as.numeric(txt))
+    }
+    
+    mots_cles <- tribble(
+      ~key, ~start, ~end,
+      "ITERATION ", 12, 22,
+      "RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61,
+      "VOLUME IN THE DOMAIN", 28, 44,
+      "ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61
+    )
+    
+    flux_raw <- grep("FLUX BOUNDARY", ls, value = TRUE, useBytes = TRUE)
+    flux_keys <- unique(sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", flux_raw))
+    
+    cul_raw <- grep("CULVERT", ls, value = TRUE, useBytes = TRUE)
+    culvert_keys <- unique(sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", cul_raw))
+    
+    extra <- tibble(key = c(flux_keys, culvert_keys)) %>%
+      mutate(start = if_else(grepl("CULVERT", key), 37, 62), end = if_else(grepl("CULVERT", key), 62, 42)) # Fix intervalle si nécessaire
+    
+    all_keys <- bind_rows(mots_cles, extra)
+    ref_idx <- grep("ITERATION ", ls, useBytes = TRUE)
+    res <- matrix(NA, nrow = length(ref_idx), ncol = nrow(all_keys))
+    colnames(res) <- all_keys$key
+    
+    for (i in 1:nrow(mots_cles)) {
+      m <- grep(mots_cles$key[i], ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m) > 0) {
+        vals <- clean_numeric(substr(ls[m], mots_cles$start[i], mots_cles$end[i]))
+        indices <- findInterval(m, ref_idx)
+        valid <- indices > 0 & indices <= nrow(res)
+        res[indices[valid], mots_cles$key[i]] <- vals[valid]
+      }
+    }
+    
+    if (length(flux_keys) > 0) {
+      m_flux <- grep("FLUX BOUNDARY", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_flux) > 0) {
+        txt_flux <- ls[m_flux]
+        vals_flux <- clean_numeric(substr(txt_flux, 25, 42))
+        keys_flux <- sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", txt_flux)
+        
+        rows <- findInterval(m_flux, ref_idx)
+        cols <- match(keys_flux, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_flux[valid]
+      }
+    }
+    
+    if (length(culvert_keys) > 0) {
+      m_cul <- grep("CULVERT", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_cul) > 0) {
+        txt_cul <- ls[m_cul]
+        vals_cul <- clean_numeric(substr(txt_cul, 37, 62))
+        keys_cul <- sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", txt_cul)
+        
+        rows <- findInterval(m_cul, ref_idx)
+        cols <- match(keys_cul, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_cul[valid]
+      }
+    }
+    
+    df <- as.data.frame(res)
+    df$Past_Ts <- past_ts
+    df <- df[!is.na(df[, 1]), ] 
+    
+    message(paste("    [DEBUG] Parsing fini. Lignes:", nrow(df)))
+    gc() 
+    return(df)
+  }
+  
+  # --- 2. INITIALISATION ---
+  message(paste("[INFO]", Sys.time(), "Start plot_sc_obs_oh"))
+  sc_list <- list.files(dsnlayerC, pattern = "SC.txt")
+  list_sortie <- list.files(dsnlayerC, pattern = "s.sortie")
+  list_sortie <- list_sortie[!grepl("\\.txt$", list_sortie)]
+  
+  # Construction d'une liste unique de tous les scénarios (racines) détectés
+  all_cases <- list()
+  
+  # 1. Scénarios issus des SC.txt
+  for (f_sc in sc_list) {
+    rac <- sub("SC\\.txt$", "", f_sc)
+    out_matches <- list_sortie[grep(create_regex_safe(rac), list_sortie)]
+    all_cases[[rac]] <- list(f_sc = f_sc, f_outs = out_matches)
+  }
+  
+  # 2. Ajout des scénarios orphelins (qui n'ont qu'un .sortie et pas de SC.txt)
+  for (f_out in list_sortie) {
+    already_matched <- FALSE
+    for (cas in all_cases) {
+      if (f_out %in% cas$f_outs) already_matched <- TRUE
+    }
+    if (!already_matched) {
+      rac <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", f_out)
+      rac <- sub("\\.sortie$", "", rac)
+      if(!endsWith(rac, "_")) rac <- paste0(rac, "_")
+      if (is.null(all_cases[[rac]])) {
+        all_cases[[rac]] <- list(f_sc = NULL, f_outs = f_out)
+      } else {
+        all_cases[[rac]]$f_outs <- unique(c(all_cases[[rac]]$f_outs, f_out))
+      }
+    }
+  }
+  
+  if (length(all_cases) == 0) return(message("Aucun SC.txt ni fichier .sortie trouvé."))
+  
+  path_shp <- file.path(dsnlayerC, "SectControl_Select.shp")
+  if(file.exists(path_shp)) sc_sf <- st_read(path_shp, quiet = TRUE) %>% mutate(ID = as.character(ID))
+  
+  contour_aire <- st_read(file.path(dsnlayerC, "Step_Cartino2d_1_Contour.shp"), quiet = TRUE)
+  aire_val <- as.numeric(st_area(contour_aire))
+  dsnscobs <- file.path(dsnlayer, "_SectionsControles", contour$NOMPOST)
+  
+  cache_sortie <- list()      
+  cache_rain_plots <- list()  
+  
+  # --- 3. BOUCLE PRINCIPALE ---
+  
+  for (racine in names(all_cases)) {
+    message(paste("----------------------------------------------------------------"))
+    message(paste("[STEP] Traitement Racine :", racine))
+    
+    f_sc <- all_cases[[racine]]$f_sc
+    f_out_match <- all_cases[[racine]]$f_outs
+    
+    has_sc <- !is.null(f_sc) && file.exists(file.path(dsnlayerC, f_sc))
+    pseudo_f_sc <- if (has_sc) f_sc else paste0(racine, "SC.txt") # Utilisé pour le parsing nom
+    racine_nom <- if (has_sc) tools::file_path_sans_ext(f_sc) else racine
+    
+    if (length(f_out_match) > 1) {
+      dates_out <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", f_out_match)
+      f_out_match <- f_out_match[which.max(as.POSIXct(dates_out, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
+    }
+    
+    if (length(f_out_match) == 0) {
+      message("  -> [WARN] .sortie introuvable pour ce cas.")
+      tab_out <- NULL
+    } else {
+      if (is.null(cache_sortie[[f_out_match]])) {
+        cache_sortie[[f_out_match]] <- parse_telemac_sortie(file.path(dsnlayerC, f_out_match))
+      }
+      tab_out <- cache_sortie[[f_out_match]]
+    }
+    
+    meta <- parse_time_meta(pseudo_f_sc)
+    rain_objs <- NULL 
+    
+    if (!is.null(tab_out)) {
+      dir_pluie <- tryCatch(file.path(dsnPluie, contour$NOMPOST), error = function(e) NULL)
+      file_brute <- NA
+      
+      if (!is.null(dir_pluie) && dir.exists(dir_pluie)) {
+        all_brutes <- list.files(dir_pluie, pattern = "^(brute)_.*\\.txt$", full.names = TRUE)
+        if (length(all_brutes) > 0) {
+          name_sc_split <- strsplit(pseudo_f_sc,"_")[[1]]
+          name_sc_brute <- do.call(paste, c(as.list(name_sc_split[1:5]), sep = "_"))
+          clean_sc <- sub("SC\\.txt$", "", name_sc_brute)
+          parts_sc <- strsplit(clean_sc, "_")[[1]]
+          
+          dur_token <- grep("^\\d+min$", parts_sc, value = TRUE)
+          if(length(dur_token) == 0) dur_token <- "IGNORE_ME" else dur_token <- dur_token[1]
+          
+          evt_token <- grep("^Evts\\d+", parts_sc, value = TRUE)
+          if(length(evt_token) == 0) evt_token <- "IGNORE_ME" else evt_token <- evt_token[1]
+          candidates <- all_brutes
+          if(evt_token== "IGNORE_ME") candidates <- NULL
+          
+          if (dur_token != "IGNORE_ME") {
+            has_dur <- grepl(paste0("_", dur_token, "([_.]|$)"), basename(candidates)) | grepl(dur_token, basename(candidates), fixed = TRUE)
+            if (any(has_dur)) candidates <- candidates[has_dur]
+          }
+          if (evt_token != "IGNORE_ME") {
+            has_evt <- grepl(evt_token, basename(candidates))
+            if (any(has_evt)) candidates <- candidates[has_evt]
+          }
+          if (length(candidates) > 0) {
+            scores <- sapply(candidates, function(cand) {
+              parts_cand <- strsplit(basename(cand), "_")[[1]]
+              sum(parts_cand %in% parts_sc)
+            })
+            file_brute <- candidates[which.max(scores)]
+            message(paste("    -> [BRUTE] Trouvé:", basename(file_brute)))
+          }
+        }
+      }
+      
+      cache_key_rain <- paste0(f_out_match, ifelse(!is.na(file_brute), basename(file_brute), "NONE"))
+      
+      if (is.null(cache_rain_plots[[cache_key_rain]])) {
+        past_ts <- tab_out$Past_Ts[1]
+        if (is.na(past_ts)) past_ts <- 1.0
+        
+        if (nrow(tab_out) > 1) {
+          pas_exp <- median(diff(tab_out[[1]]), na.rm = TRUE) * past_ts
+        } else {
+          pas_exp <- past_ts
+        }
+        if (is.na(pas_exp) || pas_exp <= 0) pas_exp <- 1.0
+        message(paste("    -> [INFO] Pas d'export:", pas_exp, "s"))
+        
+        t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        
+        acc_rain <- replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0)
+        inc_rain <- c(acc_rain[1], diff(acc_rain))
+        inc_rain[inc_rain < 0] <- 0 
+        
+        df_pluie <- data.frame(
+          Time = t_axis,
+          Intensite = inc_rain * 1000 * 3600 / pas_exp, 
+          PNette = replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * 1000 * 3600 / past_ts,
+          CumulBrut = replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0) * 1000, 
+          CumulNet = cumsum(replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * pas_exp / past_ts) * 1000,
+          NomBrut = "Pluie brute", NomNet = "Pluie nette"
+        )
+        bar_shift=0
+        if (!is.na(file_brute) && file.exists(file_brute)) {
+          tab_brute <- read.table(file_brute, header = TRUE)
+          rain_step <- get_rain_step(basename(file_brute), is_evt = meta$is_evt)
+          message(paste("    -> [BRUTE] Step:", rain_step, "min"))
+          bar_shift <- pas_exp 
+          col_val <- if("Val" %in% names(tab_brute)) "Val" else names(tab_brute)[2]
+          
+          n_out <- nrow(df_pluie)
+          if (nrow(tab_brute) >= n_out) {
+            raw_vals <- tab_brute[[col_val]][1:n_out]
+          } else {
+            raw_vals <- c(tab_brute[[col_val]], rep(0, n_out - nrow(tab_brute)))
+          }
+          
+          df_pluie$CumulBrut <- cumsum(raw_vals / rain_step)
+          df_pluie$Intensite <- raw_vals * 3600 / (pas_exp * rain_step)
+        }
+        
+        df_pluie <- df_pluie %>% filter(!is.na(Time))
+        
+        if (nrow(df_pluie) > 0) {
+          df_hyeto <- df_pluie %>% dplyr::select(Time, `Pluie brute` = Intensite, `Pluie nette` = PNette) %>%
+            pivot_longer(cols = c("Pluie brute", "Pluie nette"), names_to = "Nom", values_to = "Val")
+          df_hyeto$Nom <- factor(df_hyeto$Nom, levels = c("Pluie brute", "Pluie nette"))
+          
+          cols_hyeto <- c("Pluie brute" = "#33FFFF", "Pluie nette" = "#9933FF")
+          df_hyeto$Time[df_hyeto$Nom=="Pluie brute"]=df_hyeto$Time[df_hyeto$Nom=="Pluie brute"]+bar_shift
+          
+          g1 <- ggplotly(ggplot(df_hyeto, aes(x = Time, y = Val, fill = Nom)) +
+                           geom_col(position = "identity", width = pas_exp) +
+                           scale_fill_manual(name="", values = cols_hyeto) + 
+                           theme_bw() + ylab("Intensité [mm/h]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          df_cumul <- df_pluie %>% dplyr::select(Time, `Cumul brut` = CumulBrut, `Cumul net` = CumulNet) %>%
+            pivot_longer(cols = c("Cumul brut", "Cumul net"), names_to = "Nom", values_to = "Val")
+          cols_cumul <- c("Cumul brut" = "#33FFFF", "Cumul net" = "#9933FF")
+          
+          g3 <- ggplotly(ggplot(df_cumul, aes(x = Time, y = Val, color = Nom)) +
+                           geom_line(size = 1.1) +
+                           scale_color_manual(name="", values = cols_cumul) +
+                           theme_bw() + ylab("Cumul [mm]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          cache_rain_plots[[cache_key_rain]] <- list(g1 = g1, g3 = g3, t_axis = t_axis)
+        } else {
+          cache_rain_plots[[cache_key_rain]] <- NULL
+        }
+      }
+      rain_objs <- cache_rain_plots[[cache_key_rain]]
+    } else {
+      rain_objs <- NULL
+    }
+    
+    if (is.null(rain_objs)) {
+      message("    [WARN] Données pluie invalides ou manquantes.")
+      rain_objs <- list(g1 = NULL, g3 = NULL, t_axis = NULL)
+    }
+    
+    # ---------------------------------------------------------
+    # PARTIE Q, Z, H (Dépend strictement de la présence de SC.txt)
+    # ---------------------------------------------------------
+    if (has_sc) {
+      message("  -> [DATA] SC + Obs")
+      cl_names <- c("nom", "numsec", "Time", "Q", "Zmoy", "Zmax", "Zmin", "Hmax", "Htot")
+      tab_sc <- read.csv(file.path(dsnlayerC, f_sc), header = FALSE, sep = "", skip = 2, col.names = cl_names)
+      tab_sc <- tab_sc %>% filter(as.numeric(Time) >= 60)
+      tab_sc[, 2:9] <- lapply(tab_sc[, 2:9], as.numeric)
+      tab_sc$DATE <- meta$date_deb + tab_sc$Time
+      tab_sc$nom <- as.character(tab_sc$nom)
+      if("Q" %in% names(sc_sf))  sc_sf =sc_sf[,-which(names(sc_sf)=="Q")]
+      tab_sc <- inner_join(tab_sc, sc_sf, by = c("nom" = "ID"))
+      
+      sc_names <- unique(tab_sc$NOM) 
+      sc_list_obs <- list.files(path = dsnscobs, full.names = TRUE)
+      
+      load_obs <- function(suffix, col_name) {
+        files_match <- unlist(lapply(sc_names, function(x) grep(paste0(x, suffix), sc_list_obs, value = TRUE)))
+        if (length(files_match) == 0) return(NULL)
+        df_list <- lapply(files_match, read.csv)
+        df_obs <- do.call(rbind, df_list)
+        df_obs$Date <- as.POSIXct(ifelse(grepl(" ", df_obs$Date), df_obs$Date, paste(df_obs$Date, "00:00:00")), tz = "UTC")
+        df_obs <- df_obs %>% filter(Date >= min(tab_sc$DATE) & Date <= max(tab_sc$DATE))
+        if (nrow(df_obs) > 0) {
+          colnames(df_obs) <- c("Date", col_name, "NOM")
+          df_obs$NOM <- paste0(df_obs$NOM, "_obs") 
+          df_obs$TYPE <- "dashed" 
+          return(df_obs)
+        }
+        return(NULL)
+      }
+      
+      obs_q <- load_obs("_Q.csv", "Q")
+      df_q_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, Q, NOM) %>% mutate(Q = abs(Q), TYPE = "solid"),
+        if (!is.null(obs_q)) obs_q %>% mutate(Q = abs(Q), TYPE = "dashed") else NULL
+      )
+      
+      obs_z <- load_obs("_Z.csv", "Z")
+      df_z_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, Z = Zmax, NOM) %>% mutate(Z = Z, TYPE = "solid"),
+        if (!is.null(obs_z)) obs_z %>% mutate(TYPE = "dashed") else NULL
+      )
+      # FIX: Remplacement des 0 par NA dans la colonne Z
+      df_z_all$Z[df_z_all$Z == 0] <- NA
+      
+      obs_h <- load_obs("_H.csv", "H")
+      df_h_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, H = Hmax, NOM) %>% mutate(TYPE = "solid"),
+        if (!is.null(obs_h)) obs_h %>% mutate(TYPE = "dashed") else NULL
+      )
+      
+      save_master_plot <- function(df_data, y_col, y_lab, output_path, title_suffix) {
+        if (file.exists(output_path)) return()
+        df_data <- df_data %>% filter(!is.na(Date)) %>% arrange(NOM, Date)
+        if (nrow(df_data) == 0) return()
+        test_obs = df_data %>% filter(TYPE != "solid")
+        
+        # S'assurer qu'il n'y a que des données non-NA avant le tracé
+        df_data <- df_data %>% filter(!is.na(.data[[y_col]]))
+        
+        if(length(test_obs$Date) != 0) {
+          g_main <- ggplot() +
+            geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "solid", size = 0.7) +
+            geom_line(data = df_data %>% filter(TYPE != "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "dashed", size = 0.7) +
+            theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+            theme(legend.title = element_blank())
+        } else {
+          g_main <- ggplot() +
+            geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "solid", size = 0.7) +
+            theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+            theme(legend.title = element_blank())
+        }
+        
+        titre <- paste0("Hyéto + ", title_suffix, " ", racine_nom, " (Pluie sur tout le bassin)")
+        
+        plots_list <- list()
+        heights <- c()
+        rows_val <- 0
+        
+        has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+        
+        if (has_rain) {
+          plots_list[[1]] <- rain_objs$g3
+          plots_list[[2]] <- rain_objs$g1
+          plots_list[[3]] <- ggplotly(g_main, dynamicTicks = TRUE)
+          heights <- c(0.1, 0.2, 0.7)
+          rows_val <- 3
+        } else {
+          plots_list[[1]] <- ggplotly(g_main, dynamicTicks = TRUE)
+          heights <- c(1)
+          rows_val <- 1
+        }
+        
+        p_final <- subplot(plots_list, nrows = rows_val, shareX = TRUE, heights = heights, titleY = TRUE) %>%
+          layout(title = list(text = titre), hovermode = "closest", legend = list(title = list(text = "")))
+        saveWidget(partial_bundle(p_final), file = output_path, selfcontained = TRUE, libdir = "lib")
+      }
+      
+      message("  -> [EXPORT] HTML Q/Z/H")
+      p_q_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Q_Obs.html"))
+      p_z_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Z_Obs.html"))
+      p_h_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_H_Obs.html"))
+      
+      save_master_plot(df_q_all, "Q", "Débit [m3/s]", p_q_out, "Hydrogramme")
+      save_master_plot(df_z_all, "Z", "Côte [m]", p_z_out, "Côtes")
+      save_master_plot(df_h_all, "H", "Hauteur [m]", p_h_out, "Hauteur")
+      
+      message("  -> [GPKG] Qmax")
+      tabmaxq <- tab_sc %>% group_by(nom) %>% filter(abs(Q) == max(abs(Q))) %>% slice(1)
+      new_sc_sf <- sc_sf %>% 
+        left_join(tabmaxq %>% dplyr::select(nom, Q, DATE, Zmoy, Hmax), by = c("ID" = "nom")) %>%
+        mutate(Q = abs(Q), NomSecteur = basename(dsnlayerC))
+      st_write(new_sc_sf, file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.gpkg")), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+      file.copy(file.path(chem_routine, "C2D", Doss_Qml, "SC_Qmax.qml"), file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.qml")), overwrite = TRUE)
+    } else {
+      message("  -> [INFO] Pas de fichier SC.txt, graphes Q, Z, H ignorés.")
+    }
+    
+    # ---------------------------------------------------------
+    # PARTIE SORTIES: FLUX, OUVRAGES ET VOLUMES (.sortie direct)
+    # ---------------------------------------------------------
+    if (!is.null(tab_out)) {
+      name_case_clean <- sub("\\.cas_.*", "", basename(f_out_match[1]))
+      p_qs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QS_Obs.html"))
+      p_qoh_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QOH_Obs.html"))
+      p_vqs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_VQS_Obs.html"))
+      
+      if (!exists("t_axis") || is.null(t_axis)) t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+      
+      # 1. Ajout VQS (Volume)
+      if (!file.exists(p_vqs_out)) {
+        
+        # FIX : Récupérer le premier volume valide pour ne pas soustraire 0 si la première ligne est NA
+        vol_domaine_raw <- tab_out[["VOLUME IN THE DOMAIN"]]
+        val_ref_domaine <- vol_domaine_raw[!is.na(vol_domaine_raw)][1]
+        if (is.na(val_ref_domaine)) val_ref_domaine <- 0
+        
+        # On remplace les éventuels NA par le vrai volume de référence initial
+        vol_domaine <- replace_na(vol_domaine_raw, val_ref_domaine)
+        vol_domaine <- vol_domaine - val_ref_domaine
+        
+        # Le volume de la source imprimé dans la sortie Telemac est celui d'1 seul pas de temps de calcul (past_ts)
+        rate_injecte <- replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / past_ts
+        vol_injecte <- cumsum(rate_injecte * pas_exp) 
+        
+        df_flux_only <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY"))
+        vol_sorties_cumul <- rep(0, nrow(tab_out))
+        q_total <- rep(0, nrow(tab_out))
+        
+        if (ncol(df_flux_only) > 0) {
+          df_flux_active <- df_flux_only %>% mutate(across(everything(), ~replace_na(., 0)))
+          q_total <- rowSums(df_flux_active, na.rm=TRUE)
+          # On utilise -q_total exactement comme l'ancien code (-TimeStep*sum(...))
+          # Les flux sortants (<0 dans Telemac) deviennent des volumes positifs
+          # ce qui maintient l'équilibre physique exact pour Domaine + Sorties
+          vol_sorties_cumul <- cumsum(-q_total * pas_exp)
+        }
+        
+        df_vol <- data.frame(
+          Time = t_axis,
+          Injecte = vol_injecte,
+          Domaine = vol_domaine,
+          `Domaine + Sorties` = vol_domaine + vol_sorties_cumul,
+          check.names = FALSE
+        ) %>% pivot_longer(-Time, names_to = "Variable", values_to = "Volume")
+        
+        # Ajout des volumes individuels des sorties
+        if (exists("df_flux_active") && ncol(df_flux_active) > 0) {
+          for(col_name in colnames(df_flux_active)) {
+            clean_name <- sub("FLUX BOUNDARY", "Sortie", col_name)
+            # Volume individuel (sortant = positif grâce au signe -)
+            vol_indiv <- cumsum(-df_flux_active[[col_name]] * pas_exp)
+            df_temp <- data.frame(Time = t_axis, Variable = clean_name, Volume = vol_indiv)
+            df_vol <- bind_rows(df_vol, df_temp)
+          }
+        }
+        
+        g_vol <- ggplot(df_vol, aes(x = Time, y = Volume, color = Variable)) +
+          geom_line() + theme_bw() + labs(y = "Volume [m3]") + 
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        # Graphique débit total de sortie (conservé en valeur absolue pour le visuel graphique)
+        df_qs_total <- data.frame(Time = t_axis, Q = abs(q_total))
+        g_qs_total <- ggplot(df_qs_total, aes(x=Time, y=Q, color="Débit Sortie Total")) + 
+          geom_line() + 
+          scale_color_manual(values=c("Débit Sortie Total"="red")) +
+          theme_bw() + ylab("Débit Sortie Total [m3/s]") +
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        plots_vqs <- list()
+        if (!is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")) {
+          plots_vqs <- list(rain_objs$g3, ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 3, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        } else {
+          plots_vqs <- list(ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        }
+        saveWidget(partial_bundle(p_vqs), file = p_vqs_out, selfcontained = TRUE, libdir = "lib")
+      }
+      
+      # 2. Flux and Culverts (QS, QOH)
+      df_flux <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY|CULVERT"))
+      keep_cols <- sapply(df_flux, function(x) !all(is.na(x)))
+      df_flux <- df_flux[, keep_cols, drop=FALSE]
+      
+      if (ncol(df_flux) > 0) {
+        df_long <- df_flux %>% mutate(Time = t_axis) %>% 
+          pivot_longer(-Time) %>% filter(!is.na(Time)) 
+        
+        if (!file.exists(p_qs_out) && any(grepl("FLUX", df_long$name))) {
+          # Valeur absolue uniquement pour l'affichage graphique du débit !
+          g_qs <- ggplot(df_long %>% filter(grepl("FLUX", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
+          }
+          p_qs <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Sorties -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qs), file = p_qs_out, selfcontained = TRUE, libdir = "lib")
+        }
+        
+        if (!file.exists(p_qoh_out) && any(grepl("CULVERT", df_long$name))) {
+          g_qoh <- ggplot(df_long %>% filter(grepl("CULVERT", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
+          }
+          p_qoh <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Ouvrages -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qoh), file = p_qoh_out, selfcontained = TRUE, libdir = "lib")
+        }
+      }
+    }
+  }
+  
+  if (dir.exists(file.path(dsnlayerC, "lib"))) unlink(file.path(dsnlayerC, "lib"), recursive = TRUE)
+  message("[FIN] Terminé.")
+}
+plot_sc_obs_oh <- function() {
+  library(tidyverse)
+  library(sf)
+  library(plotly)
+  library(htmlwidgets)
+  library(tools)
+  
+  # --- 1. FONCTIONS UTILITAIRES ---
+  
+  get_rain_step <- function(filename, is_evt = TRUE) {
+    val <- as.numeric(gsub(".*[[:punct:]](\\d+)min([[:punct:]]|$).*", "\\1", filename))
+    if (is.na(val) || val == 0 || val > 1440) { 
+      parts <- strsplit(filename, "_")[[1]]
+      mins <- grep("^\\d+min$", parts, value = TRUE)
+      if (length(mins) > 0) {
+        val <- as.numeric(gsub("min", "", mins[1]))
+      } else {
+        val <- if (!is_evt || grepl("shyreg|spatial", filename, ignore.case = TRUE)) 15 else 1 
+      }
+    }
+    return(if(is.na(val) || val == 0) 1 else val)
+  }
+  
+  parse_time_meta <- function(filename) {
+    parts <- strsplit(filename, "_")[[1]]
+    is_evt <- grepl("Evt", filename, fixed = TRUE)
+    duree <- 0
+    date_deb <- as.POSIXct("1900-01-01", tz="UTC")
+    
+    if (is_evt) {
+      if (length(parts) >= 5) {
+        suppressWarnings({
+          date_deb <- strptime(gsub("[^0-9]", "", parts[4]), format = "%Y%m%d%H%M", tz = "UTC")
+          h_m <- strsplit(parts[5], "h")[[1]]
+          if(length(h_m) >= 2) duree <- (as.numeric(h_m[1]) + as.numeric(substr(h_m[2], 1, 2)) / 60) * 3600
+        })
+      }
+    } else {
+      if (length(parts) >= 8) {
+        duree <- (as.numeric(parts[7]) + as.numeric(parts[8]) / 60) * 3600
+      }
+    }
+    list(date_deb = as.POSIXct(date_deb), duree = duree, is_evt = is_evt)
+  }
+  
+  create_regex_safe <- function(str) {
+    gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", str)
+  }
+  
+  parse_telemac_sortie <- function(file_path) {
+    message(paste("    [DEBUG]", Sys.time(), "- Lecture sortie:", basename(file_path)))
+    if (!file.exists(file_path)) return(NULL)
+    
+    past_ts <- NA
+    dir_path <- dirname(file_path)
+    base_name <- basename(file_path)
+    cas_name_candidate <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", base_name)
+    
+    if (cas_name_candidate == base_name) {
+      cas_name_candidate <- substr(base_name, 1, nchar(base_name) - 30)
+    }
+    
+    cas_files <- list.files(dir_path, pattern = paste0("^", create_regex_safe(cas_name_candidate)), full.names = TRUE)
+    cas_files <- cas_files[!grepl("\\.sortie$", cas_files)]
+    
+    if (length(cas_files) > 0) {
+      lines_cas <- readLines(cas_files[1], warn = FALSE)
+      ts_idx_cas <- grep("TIME STEP|PAS DE TEMPS", lines_cas, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx_cas)) {
+        raw_line <- lines_cas[ts_idx_cas]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .cas :", past_ts))
+      }
+    }
+    
+    lines <- readLines(file_path, warn = FALSE)
+    
+    if (is.na(past_ts)) {
+      ts_idx <- grep("TIME STEP|PAS DE TEMPS", lines, useBytes = TRUE, ignore.case = TRUE)[1]
+      if (!is.na(ts_idx)) {
+        raw_line <- lines[ts_idx]
+        extracted_ts <- gsub(".*(?:STEP|TEMPS)[^0-9.]*([0-9.]+).*", "\\1", raw_line, ignore.case = TRUE)
+        past_ts <- as.numeric(extracted_ts)
+        if(!is.na(past_ts)) message(paste("    [INFO] TIME STEP lu dans .sortie :", past_ts))
+      }
+    }
+    
+    if (is.na(past_ts)) {
+      message("    [WARN] TIME STEP introuvable. Valeur par défaut 1.0 utilisée.")
+      past_ts <- 1.0
+    }
+    
+    idx_interest <- grep("ITERATION|FLUX BOUNDARY|CULVERT|RUNOFF_SCS_CN|VOLUME IN THE DOMAIN|ADDITIONAL VOLUME", lines, useBytes = TRUE)
+    if (length(idx_interest) == 0) return(NULL)
+    ls <- lines[idx_interest]
+    
+    clean_numeric <- function(txt) {
+      txt <- gsub("[*]", "", txt)
+      suppressWarnings(as.numeric(txt))
+    }
+    
+    mots_cles <- tribble(
+      ~key, ~start, ~end,
+      "ITERATION ", 12, 22,
+      "RUNOFF_SCS_CN : ACCUMULATED RAINFALL", 44, 61,
+      "VOLUME IN THE DOMAIN", 28, 44,
+      "ADDITIONAL VOLUME DUE TO SOURCE TERMS", 44, 61
+    )
+    
+    flux_raw <- grep("FLUX BOUNDARY", ls, value = TRUE, useBytes = TRUE)
+    flux_keys <- unique(sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", flux_raw))
+    
+    cul_raw <- grep("CULVERT", ls, value = TRUE, useBytes = TRUE)
+    culvert_keys <- unique(sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", cul_raw))
+    
+    extra <- tibble(key = c(flux_keys, culvert_keys)) %>%
+      mutate(start = if_else(grepl("CULVERT", key), 37, 62), end = if_else(grepl("CULVERT", key), 62, 42)) # Fix intervalle si nécessaire
+    
+    all_keys <- bind_rows(mots_cles, extra)
+    ref_idx <- grep("ITERATION ", ls, useBytes = TRUE)
+    res <- matrix(NA, nrow = length(ref_idx), ncol = nrow(all_keys))
+    colnames(res) <- all_keys$key
+    
+    for (i in 1:nrow(mots_cles)) {
+      m <- grep(mots_cles$key[i], ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m) > 0) {
+        vals <- clean_numeric(substr(ls[m], mots_cles$start[i], mots_cles$end[i]))
+        indices <- findInterval(m, ref_idx)
+        valid <- indices > 0 & indices <= nrow(res)
+        res[indices[valid], mots_cles$key[i]] <- vals[valid]
+      }
+    }
+    
+    if (length(flux_keys) > 0) {
+      m_flux <- grep("FLUX BOUNDARY", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_flux) > 0) {
+        txt_flux <- ls[m_flux]
+        vals_flux <- clean_numeric(substr(txt_flux, 25, 42))
+        keys_flux <- sub("^\\s*(FLUX BOUNDARY\\s+\\d+).*", "\\1", txt_flux)
+        
+        rows <- findInterval(m_flux, ref_idx)
+        cols <- match(keys_flux, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_flux[valid]
+      }
+    }
+    
+    if (length(culvert_keys) > 0) {
+      m_cul <- grep("CULVERT", ls, fixed = TRUE, useBytes = TRUE)
+      if (length(m_cul) > 0) {
+        txt_cul <- ls[m_cul]
+        vals_cul <- clean_numeric(substr(txt_cul, 37, 62))
+        keys_cul <- sub("^\\s*(CULVERT\\s+\\d+).*", "\\1", txt_cul)
+        
+        rows <- findInterval(m_cul, ref_idx)
+        cols <- match(keys_cul, colnames(res))
+        valid <- !is.na(cols) & rows > 0 & rows <= nrow(res)
+        res[cbind(rows[valid], cols[valid])] <- vals_cul[valid]
+      }
+    }
+    
+    df <- as.data.frame(res)
+    df$Past_Ts <- past_ts
+    df <- df[!is.na(df[, 1]), ] 
+    
+    message(paste("    [DEBUG] Parsing fini. Lignes:", nrow(df)))
+    gc() 
+    return(df)
+  }
+  
+  # --- 2. INITIALISATION ---
+  message(paste("[INFO]", Sys.time(), "Start plot_sc_obs_oh"))
+  sc_list <- list.files(dsnlayerC, pattern = "SC.txt")
+  list_sortie <- list.files(dsnlayerC, pattern = "s.sortie")
+  list_sortie <- list_sortie[!grepl("\\.txt$", list_sortie)]
+  
+  # Construction d'une liste unique de tous les scénarios (racines) détectés
+  all_cases <- list()
+  
+  # 1. Scénarios issus des SC.txt
+  for (f_sc in sc_list) {
+    rac <- sub("SC\\.txt$", "", f_sc)
+    out_matches <- list_sortie[grep(create_regex_safe(rac), list_sortie)]
+    all_cases[[rac]] <- list(f_sc = f_sc, f_outs = out_matches)
+  }
+  
+  # 2. Ajout des scénarios orphelins (qui n'ont qu'un .sortie et pas de SC.txt)
+  for (f_out in list_sortie) {
+    already_matched <- FALSE
+    for (cas in all_cases) {
+      if (f_out %in% cas$f_outs) already_matched <- TRUE
+    }
+    if (!already_matched) {
+      rac <- sub("_\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s\\.sortie$", "", f_out)
+      rac <- sub("\\.sortie$", "", rac)
+      if(!endsWith(rac, "_")) rac <- paste0(rac, "_")
+      if (is.null(all_cases[[rac]])) {
+        all_cases[[rac]] <- list(f_sc = NULL, f_outs = f_out)
+      } else {
+        all_cases[[rac]]$f_outs <- unique(c(all_cases[[rac]]$f_outs, f_out))
+      }
+    }
+  }
+  
+  if (length(all_cases) == 0) return(message("Aucun SC.txt ni fichier .sortie trouvé."))
+  
+  path_shp <- file.path(dsnlayerC, "SectControl_Select.shp")
+  if(file.exists(path_shp)) sc_sf <- st_read(path_shp, quiet = TRUE) %>% mutate(ID = as.character(ID))
+  
+  contour_aire <- st_read(file.path(dsnlayerC, "Step_Cartino2d_1_Contour.shp"), quiet = TRUE)
+  aire_val <- as.numeric(st_area(contour_aire))
+  dsnscobs <- file.path(dsnlayer, "_SectionsControles", contour$NOMPOST)
+  
+  cache_sortie <- list()      
+  cache_rain_plots <- list()  
+  
+  # --- 3. BOUCLE PRINCIPALE ---
+  
+  for (racine in names(all_cases)) {
+    message(paste("----------------------------------------------------------------"))
+    message(paste("[STEP] Traitement Racine :", racine))
+    
+    f_sc <- all_cases[[racine]]$f_sc
+    f_out_match <- all_cases[[racine]]$f_outs
+    
+    has_sc <- !is.null(f_sc) && file.exists(file.path(dsnlayerC, f_sc))
+    pseudo_f_sc <- if (has_sc) f_sc else paste0(racine, "SC.txt") # Utilisé pour le parsing nom
+    racine_nom <- if (has_sc) tools::file_path_sans_ext(f_sc) else racine
+    
+    if (length(f_out_match) > 1) {
+      dates_out <- sub(".*\\.cas_(\\d{4}-\\d{2}-\\d{2}-\\d{2}h\\d{2}min\\d{2}s)\\.sortie", "\\1", f_out_match)
+      f_out_match <- f_out_match[which.max(as.POSIXct(dates_out, format = "%Y-%m-%d-%Hh%Mmin%Ss"))]
+    }
+    
+    if (length(f_out_match) == 0) {
+      message("  -> [WARN] .sortie introuvable pour ce cas.")
+      tab_out <- NULL
+    } else {
+      if (is.null(cache_sortie[[f_out_match]])) {
+        cache_sortie[[f_out_match]] <- parse_telemac_sortie(file.path(dsnlayerC, f_out_match))
+      }
+      tab_out <- cache_sortie[[f_out_match]]
+    }
+    
+    meta <- parse_time_meta(pseudo_f_sc)
+    rain_objs <- NULL 
+    
+    if (!is.null(tab_out)) {
+      dir_pluie <- tryCatch(file.path(dsnPluie, contour$NOMPOST), error = function(e) NULL)
+      file_brute <- NA
+      
+      if (!is.null(dir_pluie) && dir.exists(dir_pluie)) {
+        all_brutes <- list.files(dir_pluie, pattern = "^(brute)_.*\\.txt$", full.names = TRUE)
+        if (length(all_brutes) > 0) {
+          name_sc_split <- strsplit(pseudo_f_sc,"_")[[1]]
+          name_sc_brute <- do.call(paste, c(as.list(name_sc_split[1:5]), sep = "_"))
+          clean_sc <- sub("SC\\.txt$", "", name_sc_brute)
+          parts_sc <- strsplit(clean_sc, "_")[[1]]
+          
+          dur_token <- grep("^\\d+min$", parts_sc, value = TRUE)
+          if(length(dur_token) == 0) dur_token <- "IGNORE_ME" else dur_token <- dur_token[1]
+          
+          evt_token <- grep("^Evts\\d+", parts_sc, value = TRUE)
+          if(length(evt_token) == 0) evt_token <- "IGNORE_ME" else evt_token <- evt_token[1]
+          candidates <- all_brutes
+          if(evt_token== "IGNORE_ME") candidates <- NULL
+          
+          if (dur_token != "IGNORE_ME") {
+            has_dur <- grepl(paste0("_", dur_token, "([_.]|$)"), basename(candidates)) | grepl(dur_token, basename(candidates), fixed = TRUE)
+            if (any(has_dur)) candidates <- candidates[has_dur]
+          }
+          if (evt_token != "IGNORE_ME") {
+            has_evt <- grepl(evt_token, basename(candidates))
+            if (any(has_evt)) candidates <- candidates[has_evt]
+          }
+          if (length(candidates) > 0) {
+            scores <- sapply(candidates, function(cand) {
+              parts_cand <- strsplit(basename(cand), "_")[[1]]
+              sum(parts_cand %in% parts_sc)
+            })
+            file_brute <- candidates[which.max(scores)]
+            message(paste("    -> [BRUTE] Trouvé:", basename(file_brute)))
+          }
+        }
+      }
+      
+      cache_key_rain <- paste0(f_out_match, ifelse(!is.na(file_brute), basename(file_brute), "NONE"))
+      
+      if (is.null(cache_rain_plots[[cache_key_rain]])) {
+        past_ts <- tab_out$Past_Ts[1]
+        if (is.na(past_ts)) past_ts <- 1.0
+        
+        if (nrow(tab_out) > 1) {
+          pas_exp <- median(diff(tab_out[[1]]), na.rm = TRUE) * past_ts
+        } else {
+          pas_exp <- past_ts
+        }
+        if (is.na(pas_exp) || pas_exp <= 0) pas_exp <- 1.0
+        message(paste("    -> [INFO] Pas d'export:", pas_exp, "s"))
+        
+        t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+        
+        acc_rain <- replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0)
+        inc_rain <- c(acc_rain[1], diff(acc_rain))
+        inc_rain[inc_rain < 0] <- 0 
+        
+        df_pluie <- data.frame(
+          Time = t_axis,
+          Intensite = inc_rain * 1000 * 3600 / pas_exp, 
+          PNette = replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * 1000 * 3600 / past_ts,
+          CumulBrut = replace_na(tab_out[["RUNOFF_SCS_CN : ACCUMULATED RAINFALL"]], 0) * 1000, 
+          CumulNet = cumsum(replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / aire_val * pas_exp / past_ts) * 1000,
+          NomBrut = "Pluie brute", NomNet = "Pluie nette"
+        )
+        bar_shift=0
+        if (!is.na(file_brute) && file.exists(file_brute)) {
+          tab_brute <- read.table(file_brute, header = TRUE)
+          rain_step <- get_rain_step(basename(file_brute), is_evt = meta$is_evt)
+          message(paste("    -> [BRUTE] Step:", rain_step, "min"))
+          bar_shift <- pas_exp 
+          col_val <- if("Val" %in% names(tab_brute)) "Val" else names(tab_brute)[2]
+          
+          n_out <- nrow(df_pluie)
+          if (nrow(tab_brute) >= n_out) {
+            raw_vals <- tab_brute[[col_val]][1:n_out]
+          } else {
+            raw_vals <- c(tab_brute[[col_val]], rep(0, n_out - nrow(tab_brute)))
+          }
+          
+          df_pluie$CumulBrut <- cumsum(raw_vals / rain_step)
+          df_pluie$Intensite <- raw_vals * 3600 / (pas_exp * rain_step)
+        }
+        
+        df_pluie <- df_pluie %>% filter(!is.na(Time))
+        
+        if (nrow(df_pluie) > 0) {
+          df_hyeto <- df_pluie %>% dplyr::select(Time, `Pluie brute` = Intensite, `Pluie nette` = PNette) %>%
+            pivot_longer(cols = c("Pluie brute", "Pluie nette"), names_to = "Nom", values_to = "Val")
+          df_hyeto$Nom <- factor(df_hyeto$Nom, levels = c("Pluie brute", "Pluie nette"))
+          
+          cols_hyeto <- c("Pluie brute" = "#33FFFF", "Pluie nette" = "#9933FF")
+          df_hyeto$Time[df_hyeto$Nom=="Pluie brute"]=df_hyeto$Time[df_hyeto$Nom=="Pluie brute"]+bar_shift
+          
+          g1 <- ggplotly(ggplot(df_hyeto, aes(x = Time, y = Val, fill = Nom)) +
+                           geom_col(position = "identity", width = pas_exp) +
+                           scale_fill_manual(name="", values = cols_hyeto) + 
+                           theme_bw() + ylab("Intensité [mm/h]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          df_cumul <- df_pluie %>% dplyr::select(Time, `Cumul brut` = CumulBrut, `Cumul net` = CumulNet) %>%
+            pivot_longer(cols = c("Cumul brut", "Cumul net"), names_to = "Nom", values_to = "Val")
+          cols_cumul <- c("Cumul brut" = "#33FFFF", "Cumul net" = "#9933FF")
+          
+          g3 <- ggplotly(ggplot(df_cumul, aes(x = Time, y = Val, color = Nom)) +
+                           geom_line(size = 1.1) +
+                           scale_color_manual(name="", values = cols_cumul) +
+                           theme_bw() + ylab("Cumul [mm]") + 
+                           theme(axis.title.x = element_blank(), legend.title = element_blank()), dynamicTicks = TRUE)
+          
+          cache_rain_plots[[cache_key_rain]] <- list(g1 = g1, g3 = g3, t_axis = t_axis)
+        } else {
+          cache_rain_plots[[cache_key_rain]] <- NULL
+        }
+      }
+      rain_objs <- cache_rain_plots[[cache_key_rain]]
+    } else {
+      rain_objs <- NULL
+    }
+    
+    if (is.null(rain_objs)) {
+      message("    [WARN] Données pluie invalides ou manquantes.")
+      rain_objs <- list(g1 = NULL, g3 = NULL, t_axis = NULL)
+    }
+    
+    # ---------------------------------------------------------
+    # PARTIE Q, Z, H (Dépend strictement de la présence de SC.txt)
+    # ---------------------------------------------------------
+    if (has_sc) {
+      message("  -> [DATA] SC + Obs")
+      cl_names <- c("nom", "numsec", "Time", "Q", "Zmoy", "Zmax", "Zmin", "Hmax", "Htot")
+      tab_sc <- read.csv(file.path(dsnlayerC, f_sc), header = FALSE, sep = "", skip = 2, col.names = cl_names)
+      tab_sc <- tab_sc %>% filter(as.numeric(Time) >= 60)
+      tab_sc[, 2:9] <- lapply(tab_sc[, 2:9], as.numeric)
+      
+      tab_sc$DATE <- meta$date_deb + tab_sc$Time
+      tab_sc$nom <- as.character(tab_sc$nom)
+      # if("Q" %in% names(sc_sf))  sc_sf =sc_sf[,-which(names(sc_sf)=="Q")]
+      c("ID","NOM") %in% names(sc_sf)
+      
+      
+      sc_sf=sc_sf[,c(which(names(sc_sf)== "ID" | names(sc_sf)== "NOM" ),ncol(sc_sf))]
+      tab_sc <- inner_join(tab_sc, sc_sf, by = c("nom" = "ID"),keep=FALSE)
+      
+      sc_names <- unique(tab_sc$NOM) 
+      sc_list_obs <- list.files(path = dsnscobs, full.names = TRUE)
+      
+      load_obs <- function(suffix, col_name) {
+        files_match <- unlist(lapply(sc_names, function(x) grep(paste0(x, suffix), sc_list_obs, value = TRUE)))
+        if (length(files_match) == 0) return(NULL)
+        df_list <- lapply(files_match, read.csv)
+        df_obs <- do.call(rbind, df_list)
+        df_obs$Date <- as.POSIXct(ifelse(grepl(" ", df_obs$Date), df_obs$Date, paste(df_obs$Date, "00:00:00")), tz = "UTC")
+        df_obs <- df_obs %>% filter(Date >= min(tab_sc$DATE) & Date <= max(tab_sc$DATE))
+        if (nrow(df_obs) > 0) {
+          colnames(df_obs) <- c("Date", col_name, "NOM")
+          df_obs$NOM <- paste0(df_obs$NOM, "_obs") 
+          df_obs$TYPE <- "dashed" 
+          return(df_obs)
+        }
+        return(NULL)
+      }
+      
+      obs_q <- load_obs("_Q.csv", "Q")
+      df_q_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, Q, NOM) %>% mutate(Q = abs(Q), TYPE = "solid"),
+        if (!is.null(obs_q)) obs_q %>% mutate(Q = abs(Q), TYPE = "dashed") else NULL
+      )
+      
+      obs_z <- load_obs("_Z.csv", "Z")
+      df_z_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, Z = Zmax, NOM) %>% mutate(Z = Z, TYPE = "solid"),
+        if (!is.null(obs_z)) obs_z %>% mutate(TYPE = "dashed") else NULL
+      )
+      # FIX: Remplacement des 0 par NA dans la colonne Z
+      df_z_all$Z[df_z_all$Z == 0] <- NA
+      
+      obs_h <- load_obs("_H.csv", "H")
+      df_h_all <- bind_rows(
+        tab_sc %>% dplyr::select(Date = DATE, H = Hmax, NOM) %>% mutate(TYPE = "solid"),
+        if (!is.null(obs_h)) obs_h %>% mutate(TYPE = "dashed") else NULL
+      )
+      
+      save_master_plot <- function(df_data, y_col, y_lab, output_path, title_suffix) {
+        if (file.exists(output_path)) return()
+        df_data <- df_data %>% filter(!is.na(Date)) %>% arrange(NOM, Date)
+        if (nrow(df_data) == 0) return()
+        test_obs = df_data %>% filter(TYPE != "solid")
+        
+        # S'assurer qu'il n'y a que des données non-NA avant le tracé
+        df_data <- df_data %>% filter(!is.na(.data[[y_col]]))
+        
+        if(length(test_obs$Date) != 0) {
+          g_main <- ggplot() +
+            geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "solid", size = 0.7) +
+            geom_line(data = df_data %>% filter(TYPE != "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "dashed", size = 0.7) +
+            theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+            theme(legend.title = element_blank())
+        } else {
+          g_main <- ggplot() +
+            geom_line(data = df_data %>% filter(TYPE == "solid"), 
+                      aes(x = Date, y = .data[[y_col]], color = NOM), 
+                      linetype = "solid", size = 0.7) +
+            theme_bw() + ylab(y_lab) + xlab("Date (heure météo)") + 
+            theme(legend.title = element_blank())
+        }
+        
+        titre <- paste0("Hyéto + ", title_suffix, " ", racine_nom, " (Pluie sur tout le bassin)")
+        
+        plots_list <- list()
+        heights <- c()
+        rows_val <- 0
+        
+        has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+        
+        if (has_rain) {
+          plots_list[[1]] <- rain_objs$g3
+          plots_list[[2]] <- rain_objs$g1
+          plots_list[[3]] <- ggplotly(g_main, dynamicTicks = TRUE)
+          heights <- c(0.1, 0.2, 0.7)
+          rows_val <- 3
+        } else {
+          plots_list[[1]] <- ggplotly(g_main, dynamicTicks = TRUE)
+          heights <- c(1)
+          rows_val <- 1
+        }
+        
+        p_final <- subplot(plots_list, nrows = rows_val, shareX = TRUE, heights = heights, titleY = TRUE) %>%
+          layout(title = list(text = titre), hovermode = "closest", legend = list(title = list(text = "")))
+        saveWidget(partial_bundle(p_final), file = output_path, selfcontained = TRUE, libdir = "lib")
+      }
+      
+      message("  -> [EXPORT] HTML Q/Z/H")
+      p_q_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Q_Obs.html"))
+      p_z_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_Z_Obs.html"))
+      p_h_out <- file.path(dsnlayerC, paste0(racine_nom, "_PN_PB_H_Obs.html"))
+      
+      save_master_plot(df_q_all, "Q", "Débit [m3/s]", p_q_out, "Hydrogramme")
+      save_master_plot(df_z_all, "Z", "Côte [m]", p_z_out, "Côtes")
+      save_master_plot(df_h_all, "H", "Hauteur [m]", p_h_out, "Hauteur")
+      
+      message("  -> [GPKG] Qmax")
+      
+      tabmaxq <- tab_sc %>% group_by(nom) %>% filter(abs(Q) == max(abs(Q))) %>% slice(1)
+      new_sc_sf <- sc_sf %>% 
+        left_join(tabmaxq %>% dplyr::select(nom, Q, DATE, Zmoy, Hmax), by = c("ID" = "nom")) %>%
+        mutate(Q = abs(Q), NomSecteur = basename(dsnlayerC))
+      # browser()
+      ici=which(colnames(new_sc_sf)=="fid")
+      if (length(ici)>0){new_sc_sf=new_sc_sf[,-ici]}
+      st_write(new_sc_sf, file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.gpkg")), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+      file.copy(file.path(chem_routine, "C2D", Doss_Qml, "SC_Qmax.qml"), file.path(dsnlayerC, paste0(gsub("\\..*", "", f_sc), "_Qmax.qml")), overwrite = TRUE)
+    } else {
+      message("  -> [INFO] Pas de fichier SC.txt, graphes Q, Z, H ignorés.")
+    }
+    
+    # ---------------------------------------------------------
+    # PARTIE SORTIES: FLUX, OUVRAGES ET VOLUMES (.sortie direct)
+    # ---------------------------------------------------------
+    if (!is.null(tab_out)) {
+      name_case_clean <- sub("\\.cas_.*", "", basename(f_out_match[1]))
+      p_qs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QS_Obs.html"))
+      p_qoh_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_QOH_Obs.html"))
+      p_vqs_out <- file.path(dsnlayerC, paste0(name_case_clean, "_PN_PB_VQS_Obs.html"))
+      
+      if (!exists("t_axis") || is.null(t_axis)) t_axis <- meta$date_deb + (tab_out[[1]] * past_ts)
+      
+      # 1. Ajout VQS (Volume)
+      if (!file.exists(p_vqs_out)) {
+        
+        # FIX : Récupérer le premier volume valide pour ne pas soustraire 0 si la première ligne est NA
+        vol_domaine_raw <- tab_out[["VOLUME IN THE DOMAIN"]]
+        val_ref_domaine <- vol_domaine_raw[!is.na(vol_domaine_raw)][1]
+        if (is.na(val_ref_domaine)) val_ref_domaine <- 0
+        
+        # On remplace les éventuels NA par le vrai volume de référence initial
+        vol_domaine <- replace_na(vol_domaine_raw, val_ref_domaine)
+        vol_domaine <- vol_domaine - val_ref_domaine
+        
+        # Le volume de la source imprimé dans la sortie Telemac est celui d'1 seul pas de temps de calcul (past_ts)
+        rate_injecte <- replace_na(tab_out[["ADDITIONAL VOLUME DUE TO SOURCE TERMS"]], 0) / past_ts
+        vol_injecte <- cumsum(rate_injecte * pas_exp) 
+        
+        df_flux_only <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY"))
+        vol_sorties_cumul <- rep(0, nrow(tab_out))
+        q_total <- rep(0, nrow(tab_out))
+        
+        if (ncol(df_flux_only) > 0) {
+          df_flux_active <- df_flux_only %>% mutate(across(everything(), ~replace_na(., 0)))
+          q_total <- rowSums(df_flux_active, na.rm=TRUE)
+          # On utilise -q_total exactement comme l'ancien code (-TimeStep*sum(...))
+          # Les flux sortants (<0 dans Telemac) deviennent des volumes positifs
+          # ce qui maintient l'équilibre physique exact pour Domaine + Sorties
+          vol_sorties_cumul <- cumsum(-q_total * pas_exp)
+        }
+        
+        df_vol <- data.frame(
+          Time = t_axis,
+          Injecte = vol_injecte,
+          Domaine = vol_domaine,
+          `Domaine + Sorties` = vol_domaine + vol_sorties_cumul,
+          check.names = FALSE
+        ) %>% pivot_longer(-Time, names_to = "Variable", values_to = "Volume")
+        
+        # Ajout des volumes individuels des sorties
+        if (exists("df_flux_active") && ncol(df_flux_active) > 0) {
+          for(col_name in colnames(df_flux_active)) {
+            clean_name <- sub("FLUX BOUNDARY", "Sortie", col_name)
+            # Volume individuel (sortant = positif grâce au signe -)
+            vol_indiv <- cumsum(-df_flux_active[[col_name]] * pas_exp)
+            df_temp <- data.frame(Time = t_axis, Variable = clean_name, Volume = vol_indiv)
+            df_vol <- bind_rows(df_vol, df_temp)
+          }
+        }
+        
+        g_vol <- ggplot(df_vol, aes(x = Time, y = Volume, color = Variable)) +
+          geom_line() + theme_bw() + labs(y = "Volume [m3]") + 
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        # Graphique débit total de sortie (conservé en valeur absolue pour le visuel graphique)
+        df_qs_total <- data.frame(Time = t_axis, Q = abs(q_total))
+        g_qs_total <- ggplot(df_qs_total, aes(x=Time, y=Q, color="Débit Sortie Total")) + 
+          geom_line() + 
+          scale_color_manual(values=c("Débit Sortie Total"="red")) +
+          theme_bw() + ylab("Débit Sortie Total [m3/s]") +
+          theme(legend.title = element_blank(), legend.position="right")
+        
+        plots_vqs <- list()
+        if (!is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")) {
+          plots_vqs <- list(rain_objs$g3, ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 3, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        } else {
+          plots_vqs <- list(ggplotly(g_vol, dynamicTicks = TRUE), ggplotly(g_qs_total, dynamicTicks = TRUE))
+          p_vqs <- subplot(plots_vqs, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = paste("Bilan Volume -", racine_nom), legend = list(title = list(text = ""), orientation = "v"))
+        }
+        saveWidget(partial_bundle(p_vqs), file = p_vqs_out, selfcontained = TRUE, libdir = "lib")
+      }
+      
+      # 2. Flux and Culverts (QS, QOH)
+      df_flux <- tab_out %>% dplyr::select(matches("FLUX BOUNDARY|CULVERT"))
+      keep_cols <- sapply(df_flux, function(x) !all(is.na(x)))
+      df_flux <- df_flux[, keep_cols, drop=FALSE]
+      
+      if (ncol(df_flux) > 0) {
+        df_long <- df_flux %>% mutate(Time = t_axis) %>% 
+          pivot_longer(-Time) %>% filter(!is.na(Time)) 
+        
+        if (!file.exists(p_qs_out) && any(grepl("FLUX", df_long$name))) {
+          # Valeur absolue uniquement pour l'affichage graphique du débit !
+          g_qs <- ggplot(df_long %>% filter(grepl("FLUX", name)), aes(Time, abs(value), color = name)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qs, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
+          }
+          p_qs <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Sorties -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qs), file = p_qs_out, selfcontained = TRUE, libdir = "lib")
+        }
+        
+        if (!file.exists(p_qoh_out) && any(grepl("CULVERT", df_long$name))) {
+          
+          # ==========================================
+          # 1. Traitement du Tibble
+          # ==========================================
+          cat("Filtrage et extraction des numéros du tibble...\n")
+          
+          tibble_filtre <- df_long %>%
+            # On garde uniquement les lignes où 'name' contient "CULVERT" (insensible à la casse)
+            filter(str_detect(name, "(?i)CULVERT")) %>%
+            # On extrait le numéro contenu dans la chaîne de caractères (ex: "CULVERT 3" devient 3)
+            # et on le stocke dans une nouvelle colonne pour la jointure
+            mutate(id_jointure = as.integer(str_extract(name, "\\d+")))
+          
+          # ==========================================
+          # 2. Traitement du Shapefile (.shp)
+          # ==========================================
+          chemin_shp <- file.path(dsnlayerC,"OuvHydrau_Select.shp")
+          cat("Lecture du fichier shapefile...\n")
+          
+          # Lecture du fichier spatial
+          shp_data <- st_read(chemin_shp, quiet = TRUE)
+          
+          # Préparation de la table issue du shapefile
+          table_shp <- shp_data %>%
+            # Optionnel : retirer la géométrie pour alléger les calculs si on ne veut qu'un tableau
+            st_drop_geometry() %>%
+            # Création de la colonne id2 qui va de 1 à la taille du dataframe (length de NOM)
+            mutate(id2 = row_number()) %>%
+            # On ne conserve que les colonnes utiles pour éviter d'alourdir le résultat final
+            dplyr::select(id2, NOM)
+          
+          # ==========================================
+          # 3. Jointure des deux tables
+          # ==========================================
+          cat("Jointure des données...\n")
+          
+          tibble_final <- tibble_filtre %>%
+            # Jointure à gauche : on garde tous les culverts du tibble, 
+            # et on y associe le NOM correspondant du shapefile
+            left_join(table_shp, by = c("id_jointure" = "id2"))
+          
+          # Affichage des premières lignes du résultat
+          cat("Aperçu du résultat :\n")
+          print(head(tibble_final))
+          
+          
+          
+          g_qoh <- ggplot(tibble_final, aes(Time, abs(value), color = NOM)) + 
+            geom_line() + theme_bw() + ylab("Débit [m3/s]") + xlab("Date (heure météo)") + theme(legend.title = element_blank())
+          
+          plots_list <- list()
+          has_rain <- !is.null(rain_objs) && !is.null(rain_objs$g3) && !inherits(rain_objs$g3, "plotly_empty")
+          if (has_rain) {
+            plots_list[[1]] <- rain_objs$g3
+            plots_list[[2]] <- rain_objs$g1
+            plots_list[[3]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(0.1, 0.2, 0.7); r <- 3
+          } else {
+            plots_list[[1]] <- ggplotly(g_qoh, dynamicTicks = TRUE)
+            h <- c(1); r <- 1
+          }
+          p_qoh <- subplot(plots_list, nrows = r, shareX = TRUE, heights = h, titleY=TRUE) %>%
+            layout(title = paste("Ouvrages -", racine_nom), hovermode = "closest", legend = list(title = list(text = "")))
+          saveWidget(partial_bundle(p_qoh), file = p_qoh_out, selfcontained = TRUE, libdir = "lib")
+        }
+      }
+    }
+  }
+  
+  if (dir.exists(file.path(dsnlayerC, "lib"))) unlink(file.path(dsnlayerC, "lib"), recursive = TRUE)
+  message("[FIN] Terminé.")
 }
 #######################plot section de controle 
 Export_GRD <- function(NomGRD,dimensionPtsElem,PTS,ELEM)

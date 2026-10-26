@@ -295,7 +295,7 @@ StricklerCN=function(Zones,iZone,Departement)
                        " port=",port_db)
             print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
             
-            # cmd=paste0("v.in.ogr -o -r input=PG:dbname=",sig user=svgc password=svgc host=172.23.210.16 port=5432 layer=ff2022_dep.d34_fftp_2022_pnb10_parcelle output=d34
+            # cmd=paste0("v.in.ogr -o -r input=PG:dbname=sig user=utilisateur password=mdp host=hote_bdd port=5432 layer=... output=...")
             cmd=paste0("v.in.ogr -o -r --overwrite input=",
                        shQuote(paste0("PG:dbname=",dbname_db,
                                       " user=",user_db,

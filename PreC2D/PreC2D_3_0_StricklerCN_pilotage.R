@@ -1,7 +1,6 @@
 cat("\014")
 
 source(file.path(chem_routine,"PreC2D","PreC2D_3_0_StricklerCN_job.R"))
-# source(file.path(chem_routine,"PreC2D","PreC2D_3_0_StricklerCN_job_ETRANGER.R"))
 
 # paramètres d'exports des résultats
 ExportGPKG=cbind(1,0)
@@ -68,7 +67,7 @@ if (basename(dsnlayerStriCN)==dsnlayerStriCN)
   SousDossUser=dsnlayerStriCN
   dsnlayerStriCNMano=1
 }
-# browser()
+
 # Parallélisme à faire
 # Boucle sur les zones
 if (nb_proc_preC2D<=1)
@@ -112,41 +111,12 @@ for (iparam in 1:length(nom_Param))
     Zones$NOM_ASC=paste0(nom_Param_,"_",Zones$ZONE,"_Res",tReso,"m.gpkg")
     Zones$CHEMIN=file.path(Zones$DOSSIERASC,Zones$NOM_ASC)
     
-    nZok=which(file.exists(file.path(dsnlayerStriCN_,Zones$DOSSIERASC,Zones$NOM_ASC))==T)
-    
     nomTAZones=file.path(dsnlayerStriCN_,paste0("TA_",nom_Param_,"_Reso",tReso,".gpkg"))
-    st_write(Zones[nZok,],nomTAZones,delete_dsn=T,delete_layer=T, quiet=T)
+    st_write(Zones,nomTAZones,delete_dsn=T,delete_layer=T, quiet=T)
     
     file.copy( file.path(chem_routine,"C2D",Doss_Qml,"TA_Raster.qml"),
                file.path(dirname(nomTAZones),paste0(substr(basename(nomTAZones),1,nchar(basename(nomTAZones))-5),".qml")),
                overwrite = T)
-    
-    nomTAexp=nomTAZones
-    debraciTA=substr(nomTAexp,1,nchar(nomTAexp)-1-nchar(strsplit(nomTAexp,"\\.")[[1]][length(strsplit(nomTAexp,"\\.")[[1]])]))
-    nomTAexpbuf=paste0(debraciTA,"buf.gpkg")
-    nomTAexprempli=paste0(debraciTA,"rempli.gpkg")
-    nomTAexpvide=paste0(debraciTA,"vide.gpkg")
-    
-    cmd=paste0(qgis_process, " run native:buffer",
-               " --INPUT=",nomTAexp,
-               " --DISTANCE=1 --SEGMENTS=5 --END_CAP_STYLE=0 --JOIN_STYLE=0 --MITER_LIMIT=2 --DISSOLVE=True",
-               " --OUTPUT=",nomTAexpbuf)
-    print(cmd);system(cmd)
-    
-    # Enlever les petits trous
-    cmd <- paste0(qgis_process, " run native:deleteholes",
-                  " --INPUT=", nomTAexpbuf,
-                  " --MIN_AREA=", 0,
-                  " --OUTPUT=", nomTAexprempli)
-    print(cmd); system(cmd)
-    
-    cmd <- paste0(qgis_process, " run native:difference",
-                  " --INPUT=",nomTAexprempli,
-                  " --OVERLAY=",nomTAexpbuf,
-                  " --OUTPUT=",nomTAexpvide,
-                  " --GRID_SIZE=None")
-    print(cmd);system(cmd)
-    
   }
 }
 

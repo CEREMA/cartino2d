@@ -48,7 +48,6 @@ FILINO_writers_gdal=function(nomjson,nominput,Ch_Classif,nom_method,reso,Ouest,E
   cat("---------------------------------------------\n")
   cat("PDAL ",nom_Rast,"\n")
   toto=system(cmd)
-  
   # Test pour voir si Pdal passe, si ce n'est pas le cas, grande chance que le fichier soit corrompu
   if (toto!=0){file.create(paste0(nominput,"BUG"))}
   
@@ -114,7 +113,7 @@ FILINO_FusionMasque = function(nomDir,TA,motcle,nombre)
   ListPart=list.files(file.path(dsnlayer,nomDir,racilayerTA,"Dalles"),pattern=paste0(motcle,nombre,"_Part"))
   if (length(ListPart)>0)
   {
-    unlink(ListPart)
+    Sys.sleep(0.1);unlink(ListPart)
     ListPart=list.files(file.path(dsnlayer,nomDir,racilayerTA,"Dalles"),pattern=paste0(motcle,nombre,"_Part"))
     if(length(ListPart)>0){cat("BUG, les fichiers ",ListPart,"ne veulent pas se supprimer, à faire manuellement\n");BOOM=SUPP_PART_XXX}
   }
@@ -140,7 +139,7 @@ FILINO_FusionMasque = function(nomDir,TA,motcle,nombre)
   # substr(TA$NOM,1,nchar(TA$NOM[1])-4)
   
   if (length(listMasq)>0)
-  {
+  {    
     cat("Nombre de dalles:",length(listMasq),"\n")
     print(listMasq[1:min(10,length(listMasq))])
     for (ibc in seq(1,length(listMasq),decoup))
@@ -195,7 +194,7 @@ FILINO_FusionMasque = function(nomDir,TA,motcle,nombre)
       st_geometry(Masques)="geometry"
       
       ListPart=list.files(file.path(dsnlayer,nomDir,racilayerTA,NomDossDalles),pattern=paste0(motcle,nombre,"_Part"))
-      if (length(ListPart)>0){unlink(ListPart)}
+      if (length(ListPart)>0){Sys.sleep(0.1);unlink(ListPart)}
       
       return(Masques)
     }
@@ -297,7 +296,7 @@ ConvertGPKG=function(NomInput,tuilage)
   if (length(ici)>0)
   {
     NomInput2=paste0(substr(NomInput,1,nchar(NomInput)-4),"_Float32.vrt")
-    cmd = paste0(shQuote(OSGeo4W_path)," gdal_translate ", "-ot Float32 ",shQuote(NomInput)," ",shQuote(NomInput2))
+    cmd = paste0(OSGeo4W_path," gdal_translate ", "-ot Float32 ",shQuote(NomInput)," ",shQuote(NomInput2))
     print(cmd);system(cmd)
     # gdal_translate -ot Float32 "H:/FILINO_Travail/10_GpsTime/D34_LEZ_MOSSON_COMPLET_GpsTime_Diff.vrt" "H:/FILINO_Travail/10_GpsTime/D34_LEZ_MOSSON_COMPLET_GpsTime_Diff_Float32.vrt"
     NomInput=NomInput2
@@ -305,14 +304,14 @@ ConvertGPKG=function(NomInput,tuilage)
   
   NomGPKG=paste0(substr(NomInput,1,nchar(NomInput)-4),".gpkg")
   
-  if (file.exists(NomGPKG)){unlink(NomGPKG)}
+  if (file.exists(NomGPKG)){Sys.sleep(0.1);unlink(NomGPKG)}
   cat("#######################################################################\n")
-  cmd = paste0(shQuote(OSGeo4W_path)," gdal_translate ", "-of GPKG ","--config OGR_SQLITE_SYNCHRONOUS OFF ", "-co  APPEND_SUBDATASET=YES ", "-co TILE_FORMAT=PNG_JPEG ",shQuote(NomInput)," ",shQuote(NomGPKG))
+  cmd = paste0(OSGeo4W_path," gdal_translate ", "-of GPKG ","--config OGR_SQLITE_SYNCHRONOUS OFF ", "-co  APPEND_SUBDATASET=YES ", "-co TILE_FORMAT=PNG_JPEG ",shQuote(NomInput)," ",shQuote(NomGPKG))
   print(cmd);system(cmd)
   if (tuilage==1)
   {
     cat("#######################################################################\n")
-    cmd = paste0(shQuote(OSGeo4W_path)," gdaladdo ","--config OGR_SQLITE_SYNCHRONOUS OFF ", "-r AVERAGE ",NomGPKG," 2 4 8 16 32 64 128 256")
+    cmd = paste0(OSGeo4W_path," gdaladdo ","--config OGR_SQLITE_SYNCHRONOUS OFF ", "-r AVERAGE ",NomGPKG," 2 4 8 16 32 64 128 256")
     print(cmd);system(cmd)
   }
 }
@@ -351,4 +350,42 @@ TApourFunc_RepSurfCoursEau=function(TA,Masque2)
   n_int = which(sapply(nb, length)>0)
   TA_tmp=TA_tmp[n_int,]
   return(TA_tmp)
+}
+
+############################################################################################
+FILINO_00c_TA_NbrePOINTS=function(chem_routine,ilaz,Gagne_MultiTA,Doss_ExpRastCount,NomTIF,pdal_exe)
+{
+  # Chemin du fichier de sortie
+  racidalle=Gagne_MultiTA$NOM[ilaz]
+  racidalle=gsub(".copc","_copc",substr(racidalle,1,nchar(racidalle)-4))
+  # Doss_ExpRastCount=file.path(dsnlayer,NomDirMNTGDAL,racilayerTA,NomDossDalles)
+  
+  NomTIF=file.path(Doss_ExpRastCount,paste0(racidalle,"_","NbrePOINTS","_","count",".tif"))
+  
+  if (dir.exists(dirname(NomTIF))==F){dir.create(dirname(NomTIF),recursive=T)}
+  
+  if (!file.exists(NomTIF))
+  {
+    nomlaz=file.path(Gagne_MultiTA$CHEMIN[ilaz],Gagne_MultiTA$NOM[ilaz])
+    cmd=paste0(pdal_exe," info ",nomlaz," --summary")
+    toto=system(cmd,intern=T)
+    
+    # Utiliser la fonction grep pour trouver la ligne contenant "num_points"
+    num_points_line <- grep("num_points", toto, value = TRUE)
+    
+    # Extraire la valeur numérique
+    num_points_value <- as.numeric(sub(".*\"num_points\": ([0-9]+),.*", "\\1", num_points_line))
+    if (is.na(num_points_value)){num_points_value=as.numeric(strsplit(num_points_line,":")[[1]][2])}
+    # Définir les paramètres du raster
+    
+    bbox=st_bbox(Gagne_MultiTA[ilaz,])
+    resolution <- 1000
+    extent <- extent(c(xmin = bbox[1], xmax = bbox[3], ymin = bbox[2], ymax = bbox[4]))  # Étendue de 1 km²
+    # Créer un raster vide
+    POINTS_count <- raster(nrows = 1, ncols = 1, ext = extent, res = resolution)
+    POINTS_count[1]=num_points_value
+    
+    # Exporter le raster
+    writeRaster(POINTS_count, filename = NomTIF, format = "GTiff", overwrite = TRUE)
+  }
 }

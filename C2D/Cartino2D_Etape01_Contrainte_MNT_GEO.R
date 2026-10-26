@@ -1,6 +1,62 @@
 #################################################################################################
 ################   Etape1_Exzeco
 #################################################################################################
+fun_creer_monde_grass <- function(SecteurGRASS, BatGRASS, EPSG, nom_secteur) {
+  loc_path <- dirname(SecteurGRASS)
+  
+  tentative <- 1
+  ok <- FALSE
+  
+  while (!ok && tentative <= 3) {
+    if (dir.exists(loc_path)) {
+      unlink(loc_path, recursive = TRUE)
+    }
+    
+    # Appel de création GRASS
+    system(paste0(BatGRASS, " -c EPSG:", EPSG, " -e \"", loc_path, "\""))
+    
+    # Petite pause pour laisser Windows valider la création du dossier
+    Sys.sleep(1)
+    
+    if (dir.exists(loc_path)) {
+      ok <- TRUE
+    } else {
+      cat("[Attente/Retry] Échec création dossier GRASS (tentative", tentative, ") :", basename(loc_path), "\n")
+      Sys.sleep(1.5)
+      tentative <- tentative + 1
+    }
+  }
+  
+  if (!ok) {
+    stop(paste("ERREUR FATALE : Impossible de créer le dossier GRASS pour le secteur :", nom_secteur))
+  }
+}
+fun_export_csv_grass <- function(raster_input, csv_output, SecteurGRASS, BatGRASS) {
+  cmd <- paste0("r.out.xyz --quiet --overwrite input=", raster_input, " output=", csv_output, " separator=comma")
+  
+  tentative <- 1
+  ok <- FALSE
+  
+  while (!ok && tentative <= 3) {
+    system(paste0(BatGRASS, " ", SecteurGRASS, " --exec ", cmd))
+    
+    # Laisser 1 seconde à Windows pour vider le cache d'écriture
+    Sys.sleep(1)
+    
+    if (file.exists(csv_output) && file.info(csv_output)$size > 0) {
+      ok <- TRUE
+    } else {
+      cat("[Attente/Retry] Fichier CSV vide (tentative", tentative, ") :", basename(csv_output), "\n")
+      if (file.exists(csv_output)) unlink(csv_output)
+      Sys.sleep(2)
+      tentative <- tentative + 1
+    }
+  }
+  
+  if (!ok) {
+    stop(paste("ERREUR FATALE : Impossible de générer le CSV non vide :", csv_output))
+  }
+}
 
 # Travail sur les contours d'Exzeco pour réaliser les points de contrainte et sur les limites du domaine
 Etape1_Contour = function(dsnlayer, contour, crs)
@@ -147,500 +203,331 @@ Etape1_GrandContourBordDecoupe=function(GrandContour,Cont1Buf,Reso)
   return(list(contour_segm_fin, Contoursanstrou,contour_segm))
 }
 
-#############################################################################
-################ EXZECO #####################################################
-#############################################################################
+
 Etape1_Exzeco = function(dsnlayer, contour, contour_int,Contoursanstrou,crs)
 { 
-  ################ Lecture exzeco par secteur
-  # Exz_Pts <- NaN
+  # --- Sous-fonction de filtrage par BLOCS GÉOGRAPHIQUES DYNAMIQUES ---
+  FiltreParBlocs = function(pts, seuil) {
+    if (nrow(pts) <= 1) return(pts)
+    
+    # 1. Définition dynamique du nombre de blocs (1 pour 5000 pts environ)
+    n_blocs <- max(1, floor(nrow(pts) / 5000))
+    xmin <- min(pts[,1]); xmax <- max(pts[,1])
+    if (xmax == xmin) breaks <- c(xmin - 1, xmax + 1) else breaks <- seq(xmin, xmax, length.out = n_blocs + 1)
+    
+    # 2. Fonction de filtrage pour un bloc (avec gestion des bords)
+    TraiterUnBloc = function(k) {
+      x_start <- breaks[k]; x_end <- breaks[k+1]
+      idx_bloc_large <- which(pts[,1] >= (x_start - seuil) & pts[,1] <= (x_end + seuil))
+      if (length(idx_bloc_large) == 0) return(NULL)
+      
+      sub_pts <- pts[idx_bloc_large, , drop = FALSE]
+      sub_pts <- sub_pts[order(sub_pts[,1]), ] 
+      
+      keep <- rep(TRUE, nrow(sub_pts))
+      seuil_sq <- seuil^2
+      
+      for (i in 1:(nrow(sub_pts) - 1)) {
+        if (!keep[i]) next
+        for (j in (i + 1):nrow(sub_pts)) {
+          if (!keep[j]) next
+          if ((sub_pts[j, 1] - sub_pts[i, 1]) > seuil) break
+          d2 <- (sub_pts[j, 1] - sub_pts[i, 1])^2 + (sub_pts[j, 2] - sub_pts[i, 2])^2
+          if (d2 < seuil_sq) keep[j] <- FALSE
+        }
+      }
+      
+      res_pts <- sub_pts[keep, , drop = FALSE]
+      if (k == 1) {
+        idx_final <- which(res_pts[,1] >= x_start & res_pts[,1] <= x_end)
+      } else {
+        idx_final <- which(res_pts[,1] > x_start & res_pts[,1] <= x_end)
+      }
+      return(res_pts[idx_final, , drop = FALSE])
+    }
+    
+    liste_blocs <- lapply(1:n_blocs, TraiterUnBloc)
+    pts_finaux <- do.call(rbind, liste_blocs)
+    return(pts_finaux)
+  }
+  
+  # Points d'extrémités buses (à protéger absolument)
+  Pts_Fixes_OH <- matrix(ncol = 2, nrow = 0)
+  
+  ################ Lecture données
   if (is.na(contour$Exzeco) == FALSE){
     GOON=0
     if (is.na(as.numeric(contour$Exzeco)) == TRUE & nchar(contour$Exzeco)>8)
     {
-      # lecture des données Exzeco
-      Exzeco <- st_read(contour$Exzeco)
-      GOON=1
+      Exzeco <- st_read(contour$Exzeco); GOON=1
     }else{
-      if (substr(contour$Exzeco,1,5)=="Courb")
+      if (substr(contour$Exzeco,1,5)=="courb")
       {
-        NomCourb_5="Courb_i5" # FRED pas bien coder
+        NomCourb_5="Courb_i5"
         Exzeco <- st_read(file.path(dsnlayerC,paste0(NomCourb_5,".gpkg")))
         Exzeco$AIRE=st_area(Exzeco)
-        SeuilAExz=25
-        units(SeuilAExz) = "m2"
+        SeuilAExz=25; units(SeuilAExz) = "m2"
         nici=which(Exzeco$AIRE<SeuilAExz)
         if (length(nici)>0){Exzeco=Exzeco[-nici,]}
         st_write(Exzeco,file.path(dsnlayerC,paste0(NomCourb_5,"_nettoye.gpkg")), delete_layer = T, quiet = T)
         GOON=1
-      }else{
-        # cat("Votre champ contour$Exzeco n'est pas conforme, lien vers Exzeco, entier ou CourbXXX: ",contour$Exzeco,"\n")
-        # BUG=Caplante
       }
     }
+    
     if (GOON==1)
     {
-      st_crs(Exzeco) <- crs
-      st_crs(contour_int) <- crs
+      st_crs(Exzeco) <- crs; st_crs(contour_int) <- crs
       Exzeco <- st_crop(Exzeco,contour_int)
-      #-- On ne garde que les Exzeco qui intersectent le bord
-      cat(nomcontour, " ---- Intersection d'exzeco sur ce secteur\n")
-      # modif 11/01/2022 nb=st_intersects(Exzeco,contour)
       nb <- st_intersects(Exzeco, contour_int)
-      n_int <-  which(sapply(nb, length) > 0)
+      n_int <- which(sapply(nb, length) > 0)
       Exzeco <- Exzeco[n_int,]
       
-      Exzeco_Union <-
-        st_simplify(st_union(Exzeco),
-                    preserveTopology = FALSE,
-                    dTolerance = 0)
-      # Coupure de Exzeco dans le contour
+      Exzeco_Union <- st_make_valid(st_union(Exzeco))
       Exzeco_Int <- st_intersection(Exzeco_Union, contour_int)
+      Exzeco_Int <- st_collection_extract(Exzeco_Int, "POLYGON") 
       
-      # ###########################################################################
-      # # Exzeco buffer exzeco pour nouvelle 1eme contrainte point
+      Exz1_Pts <- matrix(ncol = 2, nrow = 0); Exz2_Pts <- matrix(ncol = 2, nrow = 0); Exz3_Pts <- matrix(ncol = 2, nrow = 0)
       
-      nom_exp <- "Step_Cartino2d_2_1_Exz1"
-      Result <-
-        Buf_et_Coup(
-          dsnlayerC,
-          nom_exp,
-          nom_STEP2_Zone,
-          Exzeco_Int,
-          Contoursanstrou,
-          contour$Exz1_Buf,
-          contour$Exz1_Dx,
-          contour$Ratio_Dx,
-          crs
-        )
-      Exz1_Pts <- Result$Exz_Pts
-      Exz1 <- Result$Exz
-      st_crs(Exz1) <- crs
-      
-      # ###########################################################################
-      # # Exzeco buffer exzeco pour nouvelle 2eme contrainte point
-      cat(nomcontour, " ---- 2ème contrainte Exzeco\n")
-      
-      nom_exp <- "Step_Cartino2d_2_2_Exz2"
-      Result2 <-
-        Buf_et_Coup(
-          dsnlayerC,
-          nom_exp,
-          nom_STEP2_Zone,
-          Exzeco_Int,
-          Contoursanstrou,#contour,
-          contour$Exz2_Buf,
-          contour$Exz2_Dx,
-          contour$Ratio_Dx,
-          crs
-        )
-      Exz2_Pts <- Result2$Exz_Pts
-      Exz2 <- Result2$Exz
-      st_crs(Exz2) <- crs
-      
-      ###########################################################################
-      # Exzeco buffer exzeco pour nouvelle 3eme contrainte point
-      cat(nomcontour, " ---- 3ème contrainte Exzeco\n")
-      nom_exp <- "Step_Cartino2d_2_3_Exz3"
-      Result <-
-        Buf_et_Coup(
-          dsnlayerC,
-          nom_exp,
-          nom_STEP2_Zone,
-          Exzeco_Int,
-          Contoursanstrou,#contour,
-          contour$Exz3_Buf,
-          contour$Exz3_Dx,
-          contour$Ratio_Dx,
-          crs
-        )
-      Exz3_Pts <- Result$Exz_Pts
-      Exz3 <- Result$Exz
-      st_crs(Exz3) <- crs
+      if (nrow(st_as_sf(Exzeco_Int)) > 0) {
+        nom_exp <- "Step_Cartino2d_2_1_Exz1"; f_exz1 <- file.path(dsnlayerC, paste0(nom_exp, ".gpkg"))
+        if(file.exists(f_exz1)){
+          Exz1 <- st_read(f_exz1, quiet = TRUE)
+          if(nrow(Exz1)>0) Exz1_Pts <- st_coordinates(Exz1)[, 1:2]
+        } else {
+          Result1 <- try(Buf_et_Coup(dsnlayerC, nom_exp, nom_STEP2_Zone, Exzeco_Int, Contoursanstrou, contour$Exz1_Buf, contour$Exz1_Dx, contour$Ratio_Dx, crs))
+          if (!inherits(Result1, "try-error")) Exz1_Pts <- Result1$Exz_Pts
+        }
+        
+        cat(nomcontour, " ---- 2ème contrainte Exzeco\n")
+        nom_exp <- "Step_Cartino2d_2_2_Exz2"; f_exz2 <- file.path(dsnlayerC, paste0(nom_exp, ".gpkg"))
+        if(file.exists(f_exz2)){
+          Exz2 <- st_read(f_exz2, quiet = TRUE)
+          if(nrow(Exz2)>0) Exz2_Pts <- st_coordinates(Exz2)[, 1:2]
+        } else {
+          Result2 <- try(Buf_et_Coup(dsnlayerC, nom_exp, nom_STEP2_Zone, Exzeco_Int, contour, contour$Exz2_Buf, contour$Exz2_Dx, contour$Ratio_Dx, crs))
+          if (!inherits(Result2, "try-error")) Exz2_Pts <- Result2$Exz_Pts
+        }
+        
+        cat(nomcontour, " ---- 3ème contrainte Exzeco\n")
+        nom_exp <- "Step_Cartino2d_2_3_Exz3"; f_exz3 <- file.path(dsnlayerC, paste0(nom_exp, ".gpkg"))
+        if(file.exists(f_exz3)){
+          Exz3 <- st_read(f_exz3, quiet = TRUE)
+          if(nrow(Exz3)>0) Exz3_Pts <- st_coordinates(Exz3)[, 1:2]
+        } else {
+          if (!is.na(contour$Exz3_Buf) && !is.na(contour$Exz3_Dx)) {
+            Result3 <- try(Buf_et_Coup(dsnlayerC, nom_exp, nom_STEP2_Zone, Exzeco_Int, contour, contour$Exz3_Buf, contour$Exz3_Dx, contour$Ratio_Dx, crs))
+            if (!inherits(Result3, "try-error")) Exz3_Pts <- Result3$Exz_Pts
+          }
+        }
+      }
       
       Exz_Pts <- rbind(Exz1_Pts, Exz2_Pts, Exz3_Pts)
       
-      nom_OuvHydrau <- contour$OH
+      # --- FILTRE 1 : FOND DE PLAN (2.49m) ---
+      if (nrow(Exz_Pts) > 1) {
+        cat(nomcontour, " ---- Filtrage par blocs du terrain naturel (< 2.49m)\n")
+        NbInitial_Pre <- nrow(Exz_Pts)
+        Exz_Pts <- FiltreParBlocs(Exz_Pts, 2.49)
+        
+        cat("   -> Export fond de plan filtré vers 'Verif_Points_Filtres_249.gpkg'\n")
+        pts_pre_sf <- st_as_sf(data.frame(x = Exz_Pts[, 1], y = Exz_Pts[, 2]), coords = c("x", "y"), crs = crs)
+        st_write(pts_pre_sf, dsn = file.path(dsnlayerC, "Verif_Points_Filtres_249.gpkg"), delete_layer = TRUE, quiet = TRUE)
+      }
       
+      nom_OuvHydrau <- contour$OH
       if (file.exists(nom_OuvHydrau) == TRUE)
       {
-        # Voir intersection si non vide
-        # Lecture du réseau
         OuvHydrau <- st_read(nom_OuvHydrau)
-        
-        # On récupère ce qui intersecte
-        # et ce qui a un code >=0
         nbRC <- st_intersects(OuvHydrau, contour)
-        n_int <-
-          which(sapply(nbRC, length) > 0 &
-                  OuvHydrau$CIRC >= 0 & OuvHydrau$CIRC <= 2)
+        n_int <- which(sapply(nbRC, length) > 0 & OuvHydrau$CIRC >= 0 & OuvHydrau$CIRC <= 2)
         
-        if (length(n_int > 0) > 0)
+        if (length(n_int) > 0)
         {
           cat(nomcontour," ---- Récupération des ouvrages hydrauliques\n")
           OuvHydrau <- OuvHydrau[n_int,]
+          OuvHydrau$LENGTH <- round(as.numeric(st_length(OuvHydrau)), 2)
+          OH_BoutsPts <- do.call(rbind, lapply(1:dim(OuvHydrau)[1], function(x) { cbind(st_coordinates(OuvHydrau[x,])[c(1, dim(st_coordinates(OuvHydrau[x,]))[1]), 1:2], x, rbind(1, 2)) }))
           
-          # Calcul de la longeur
-          OuvHydrau$LENGTH <- round(st_length(OuvHydrau), 2)
+          len_num <- as.numeric(OuvHydrau$LENGTH); idx_OH_traiter <- 1:nrow(OuvHydrau)
+          
+          if (length(idx_OH_traiter) > 0) {
+            cat(nomcontour, " ---- Création zones d'exclusion et extrémités réelles\n")
+            Standard_Buf <- if(!is.null(contour$Exz1_Dx)) contour$Exz1_Dx - 0.50 else 2.5
+            Buf_Sizes <- rep(Standard_Buf, nrow(OuvHydrau))
+            Buf_Sizes[which(len_num < 8)] <- 1.5; Buf_Sizes[which(len_num >= 8 & len_num <= 12)] <- 2.0
+            Sizes_Subset <- Buf_Sizes[idx_OH_traiter]
+            
+            indices_starts <- 2 * idx_OH_traiter - 1; indices_ends <- 2 * idx_OH_traiter
+            Coords_Start <- OH_BoutsPts[indices_starts, 1:2, drop=FALSE]; Coords_End <- OH_BoutsPts[indices_ends,   1:2, drop=FALSE]
+            Pts_Start_SF <- st_as_sf(data.frame(x=Coords_Start[,1], y=Coords_Start[,2]), coords=c("x","y"), crs=crs)
+            Pts_End_SF   <- st_as_sf(data.frame(x=Coords_End[,1],   y=Coords_End[,2]),   coords=c("x","y"), crs=crs)
+            
+            Global_Exclusion_Zone <- st_make_valid(st_union(c(st_geometry(st_buffer(Pts_Start_SF, dist = Sizes_Subset)), st_geometry(st_buffer(Pts_End_SF, dist = Sizes_Subset)))))
+            
+            if (nrow(Exz_Pts) > 0) {
+              inter_oh <- st_intersects(st_as_sf(data.frame(x = Exz_Pts[, 1], y = Exz_Pts[, 2]), coords = c("x", "y"), crs = crs), st_buffer(Global_Exclusion_Zone, dist = 3.0))
+              Exz_Pts <- Exz_Pts[which(lengths(inter_oh) == 0), , drop = FALSE]
+            }
+            
+            Dist_Ligne_Pts <- Sizes_Subset - 0.2
+            All_Inner_Bufs <- c(st_geometry(st_buffer(Pts_Start_SF, dist = Dist_Ligne_Pts)), st_geometry(st_buffer(Pts_End_SF, dist = Dist_Ligne_Pts)))
+            Geom_Union <- st_make_valid(st_union(All_Inner_Bufs))
+            
+            Pts_Couronne <- NULL
+            if(!is.null(Geom_Union) && length(Geom_Union) > 0) {
+              Indiv_Boundaries <- st_boundary(All_Inner_Bufs)
+              All_Candidates <- st_cast(st_line_sample(Indiv_Boundaries, n = 6), "POINT")
+              Selection <- st_is_within_distance(All_Candidates, st_boundary(Geom_Union), dist = 0.02)
+              if (any(lengths(Selection) > 0)) Pts_Couronne <- st_coordinates(All_Candidates[lengths(Selection) > 0])[, 1:2, drop=FALSE]
+            }
+            
+            Pts_Fixes_OH <- unique(rbind(Coords_Start, Coords_End))
+            Aj_Pts <- Pts_Couronne
+          }
+          
+          # --- INTEGRATION DES ATTRIBUTS HYDRAULIQUES ---
+          cat("   -> Intégration des attributs hydrauliques dans le SHP...\n")
+          
+          # Sauvegarde de la hauteur initiale dans HAUT2 avant modification pour CIRC=2
+          OuvHydrau$HAUT2 <- as.numeric(OuvHydrau$HAUT1)
+          
+          # Paramètres standards
           OuvHydrau$FRIC <- 1 / 80
-          OuvHydrau$CE1 <- 0.5
-          OuvHydrau$CE2 <- 0.5
-          OuvHydrau$CS1 <- 1
-          OuvHydrau$CS2 <- 0.5
-          OuvHydrau$CLP <- 1
-          OuvHydrau$LBUS <- 0
-          OuvHydrau$CV <- 0
-          OuvHydrau$C56 <- 0
-          OuvHydrau$CV5 <- 0
-          OuvHydrau$C5 <- 0
-          OuvHydrau$CT <- 0
-          OuvHydrau$D1 <- 0
-          OuvHydrau$D2 <- 0
-          OuvHydrau$A1 <- 0
-          OuvHydrau$A2 <- 0
-          OuvHydrau$AA <- 1
+          OuvHydrau$CE1 <- 0.5; OuvHydrau$CE2 <- 0.5; OuvHydrau$CS1 <- 1; OuvHydrau$CS2 <- 0.5
+          OuvHydrau$CLP <- 1; OuvHydrau$LBUS <- 0; OuvHydrau$CV <- 0
+          OuvHydrau$C56 <- if("Q_theo" %in% names(OuvHydrau)) as.numeric(OuvHydrau$Q_theo) else 0
+          OuvHydrau$CV5 <- 0; OuvHydrau$C5 <- 0; OuvHydrau$CT <- 0
+          OuvHydrau$D1 <- 0; OuvHydrau$D2 <- 0; OuvHydrau$A1 <- 0; OuvHydrau$A2 <- 0; OuvHydrau$AA <- 1
           
+          # Cas des voûtes (CIRC=2) : on calcule la hauteur hydraulique équivalente
           nc2 = which(OuvHydrau$CIRC == 2)
-          if (length(nc2 > 0))
-          {
-            OuvHydrau[nc2,]$HAUT1 <-
-              OuvHydrau[nc2,]$Surf / OuvHydrau[nc2,]$LRG
-            OuvHydrau[nc2,]$CIRC <- 0
+          if (length(nc2) > 0) { 
+            OuvHydrau[nc2,]$HAUT1 <- as.numeric(OuvHydrau[nc2,]$Surf / OuvHydrau[nc2,]$LRG)
+            OuvHydrau[nc2,]$CIRC <- 0 
           }
           
-          st_write(
-            OuvHydrau,
-            dsn = file.path(dsnlayerC, "OuvHydrau_Select.shp"),
-            delete_layer = T,
-            quiet = T
-          )
-          file.copy(file.path(chem_routine,"C2D",Doss_Qml,paste0("OuvHydrau_Select", ".qml")),
-                    file.path(dsnlayerC,paste0("OuvHydrau_Select", ".qml")))
-          OuvHydrau <-
-            st_intersection(OuvHydrau,
-                            st_buffer(Contoursanstrou, contour$Cont2_Buf / 2))
-          # On coupe les ouvrages, s ils n ont pas la meme longueur on exporte un fichier pour le faire voir
-          difflong <-
-            OuvHydrau$LENGTH - round(st_length(OuvHydrau), 2)
-          print(difflong)
-          zer <- 0
-          units(zer) <- "m"
-          if (max(difflong) > zer)
-          {
-            st_write(
-              OuvHydrau[which(difflong > zer),],
-              dsn = file.path(dsnlayerC, "OuvHydrau_SelectCoup.shp"),
-              delete_layer = TRUE,
-              quiet = TRUE
-            )
-            file.copy(file.path(chem_routine,"C2D",Doss_Qml,paste0("OuvHydrau_Select", ".qml")),
-                      file.path(dsnlayerC,paste0("OuvHydrau_SelectCoup", ".qml")))
-          }
+          # Export du SHP avec tous les nouveaux champs
+          st_write(OuvHydrau, dsn = file.path(dsnlayerC, "OuvHydrau_Select.shp"), delete_layer = T, quiet = T)
           
-          # Récupération de la géométrie
-          OuvHydrau_Debut_Fin <- sapply(1:dim(OuvHydrau)[1],
-                                        function(x) {
-                                          cbind(st_coordinates(OuvHydrau[x,])[1, 1:2],
-                                                st_coordinates(OuvHydrau[x,])[2, 1:2])
-                                        })
-          
-          # Récupération des entrées et sorties
-          OH_BoutsPts <-
-            do.call(rbind, lapply(1:dim(OuvHydrau)[1], function(x) {
-              cbind(st_coordinates(OuvHydrau[x,])[c(1, dim(st_coordinates(OuvHydrau[x,]))[1]), 1:2], x, rbind(1, 2))
-            }))
-          # Suppression des points de contraintes trop proches
-          
-          Ratio <- 3
-          Exz_Dx <- contour$Exz1_Dx
-          
-          Exz_Pts <-
-            GardeNvxPointsLoinPointsInitiaux(Exz_Pts, OH_BoutsPts, Ratio, Exz_Dx)
-          
-          # et ajouter les points du réseau en dernier
-          for (ip in unique(OH_BoutsPts[, 3]))
-          {
-            vecte <- (OH_BoutsPts[ip * 2 - 1, 1:2] - OH_BoutsPts[ip * 2, 1:2])
-            # On pourrait faire un theta 1 et theta 2 avec les deux points continus et pas les extrémité si besoin!
-            Theta <- atan(vecte[2] / vecte[1])
-            
-            if (vecte[1] < 0) {
-              Theta <- Theta + pi
-            }
-            
-            distES <- (sum(vecte ^ 2)) ^ 0.5
-            if (distES > (Ratio * Exz_Dx))
-            {
-              iang <- 1:6
-            } else{
-              # print("OuvHydrau trop court pour instant")
-              iang <- 1:3
-            }
-            
-            # 6 ou 3 points a l entree
-            RatioOH <- 2
-            for (ies in c(-1, 0))
-            {
-              Aj_Ptstmp <-
-                t(sapply(iang, function(x) {
-                  OH_BoutsPts[ip * 2 + ies, 1:2] + Exz_Dx * cbind(cos((x - 2) * 2 * pi / 6 +
-                                                                        Theta), sin((x - 2) * 2 * pi / 6 + Theta))
-                }))
-              #Verification qu ils ne soient pas trop proche de points existants
-              if (ip > 1 | ies != -1)
-              {
-                Aj_Ptstmp <-
-                  GardeNvxPointsLoinPointsInitiaux(Aj_Ptstmp, Aj_Pts, RatioOH, Exz_Dx)
-                if (length(Aj_Ptstmp) > 2)
-                {
-                  Aj_Pts <- rbind(Aj_Pts, Aj_Ptstmp)
-                }
-              } else{
-                Aj_Pts <- Aj_Ptstmp
-              }
-            }
-          }
-          
-          Aj_Pts <-
-            GardeNvxPointsLoinPointsInitiaux(Aj_Pts, unique(OH_BoutsPts[, 1:2]), 0.99, Exz_Dx)
-          if (dim(Aj_Pts)[1] > 0)
-          {
-            Exz_Pts <- rbind(Exz_Pts, Aj_Pts) #,unique(OH_BoutsPts[,1:2]))
+          # --- Suite du maillage ---
+          Exz_Dx <- contour$Exz1_Dx; Ratio <- 0.6
+          Pool_OH <- rbind(Pts_Fixes_OH, Aj_Pts)
+          if (!is.null(Pool_OH) && nrow(Pool_OH) > 0) {
+            Exz_Pts <- GardeNvxPointsLoinPointsInitiaux(Exz_Pts, Pool_OH, Ratio, Exz_Dx)
+            Exz_Pts <- rbind(Aj_Pts, Exz_Pts) 
           }
         }
       }
       
+      # # LIGNES DE CONTRAINTE
+      # nom_LigContr <- contour$LigContr
+      # if (file.exists(nom_LigContr) == TRUE)
+      # {
+      #   LigContr <- st_read(nom_LigContr); LigContr <- st_cast(st_cast(LigContr, "MULTILINESTRING"), "LINESTRING")
+      #   nbRC <- st_intersects(LigContr, contour); n_int <- which(sapply(nbRC, length) > 0)
+      #   
+      #   if (length(n_int) > 0)
+      #   {
+      #     cat(nomcontour," ---- Récupération des lignes de contraintes\n")
+      #     LigContr = st_intersection(LigContr[n_int,], st_buffer(Contoursanstrou, contour$Cont2_Buf / 2))
+      #     # Nettoyage GEOMETRYCOLLECTION
+      #     LigContr = st_collection_extract(LigContr, "LINESTRING")
+      #     Pool_OH_Total <- if(exists("Aj_Pts")) rbind(Pts_Fixes_OH, Aj_Pts) else Pts_Fixes_OH
+      #     if (!is.null(Pool_OH_Total) && nrow(Pool_OH_Total) > 0){
+      #       # LigContr <- st_difference(LigContr, st_sf(st_union(st_buffer(st_as_sf(as.data.frame(Pool_OH_Total), coords=c(1,2), crs=crs), contour$Exz1_Dx))))
+      #       # Buffer de nettoyage
+      #       clean_buf <- st_union(st_buffer(st_as_sf(as.data.frame(Pool_OH_Total), coords=1:2, crs=crs), contour$Exz1_Dx))
+      #       LigContr <- st_difference(LigContr, st_sf(geometry=st_sfc(clean_buf, crs=crs)))
+      #       # Nettoyage GEOMETRYCOLLECTION post-difference
+      #       LigContr = st_collection_extract(LigContr, "LINESTRING")
+      #     } 
+      #     
+      #     
+      #     # Simple2 = st_segmentize(st_simplify(LigContr, dTolerance = 0.05), 0.1)
+      #     # Simplification et échantillonnage
+      #     Simple2 = st_segmentize(st_simplify(LigContr, dTolerance = 0.05), 0.1)
+      #     # Re-cast final pour garantir le succès de st_coordinates
+      #     Simple2 = st_cast(Simple2, "LINESTRING")
+      #     Simple2 = Simple2[which(as.numeric(st_length(Simple2)) > (0.68 * contour$Exz1_Dx)),]
+      #     
+      #     if(nrow(Simple2)>0){
+      #       LigContr_Pts = st_coordinates(Simple2)[,1:2]
+      #       Exz_Pts = GardeNvxPointsLoinPointsInitiaux(Exz_Pts, LigContr_Pts, 0.5, contour$Exz1_Dx)
+      #       Exz_Pts = rbind(Exz_Pts, LigContr_Pts)
+      #     }
+      #   }
+      # }
+      # LIGNES DE CONTRAINTE
       nom_LigContr <- contour$LigContr
       if (file.exists(nom_LigContr) == TRUE)
       {
-        # Lecture du réseau
-        LigContr <- st_read(nom_LigContr)
-        LigContr <-
-          st_cast(st_cast(LigContr, "MULTILINESTRING"), "LINESTRING")
+        LigContr <- st_read(nom_LigContr); LigContr <- st_cast(st_cast(LigContr, "MULTILINESTRING"), "LINESTRING")
+        # --- SECURITE CRS ---
+        if(st_crs(LigContr) != crs) LigContr <- st_transform(LigContr, crs)
         
-        # On récupère ce qui intersecte
-        # et ce qui a un code >=0
-        nbRC <- st_intersects(LigContr, contour)
-        n_int <-  which(sapply(nbRC, length) > 0)
+        nbRC <- st_intersects(LigContr, contour); n_int <- which(sapply(nbRC, length) > 0)
         
-        if (length(n_int > 0) > 0)
+        if (length(n_int) > 0)
         {
           cat(nomcontour," ---- Récupération des lignes de contraintes\n")
-          LigContr = LigContr[n_int,]
+          LigContr = st_intersection(LigContr[n_int,], st_buffer(Contoursanstrou, contour$Cont2_Buf / 2))
+          LigContr = st_collection_extract(LigContr, "LINESTRING")
           
-          LigContr = st_intersection(LigContr,
-                                     st_buffer(Contoursanstrou, contour$Cont2_Buf / 2))
-          LigContr = st_cast(st_cast(LigContr, "MULTILINESTRING"), "LINESTRING")
-          st_write(
-            LigContr,
-            dsn = file.path(dsnlayerC, "LigContr_Select.shp"),
-            delete_layer = T,
-            quiet = T
-          )
-          file.copy(file.path(chem_routine,"C2D",Doss_Qml,paste0("LigContr_Select", ".qml")),
-                    file.path(dsnlayerC,paste0("LigContr_Select", ".qml")))
+          # Échantillonnage à 0.2m (Plus robuste que 0.1m)
+          Simple2 = st_segmentize(st_simplify(LigContr, dTolerance = 0.05), 0.2)
+          Simple2 = st_cast(Simple2, "LINESTRING")
           
-          # S'il y a des ouvrages, les ouvrages prioritaires
-          if (file.exists(nom_OuvHydrau) == TRUE)
-          {
-            OH_BoutsPts = do.call(rbind, lapply(1:dim(OuvHydrau)[1], function(x) {
-              cbind(st_coordinates(OuvHydrau[x,])[c(1, dim(st_coordinates(OuvHydrau[x,]))[1]), 1:2], x, rbind(1, 2))
-            }))
+          if(nrow(Simple2) > 0) {
+            LigContr_Pts = st_coordinates(Simple2)[,1:2]
             
-            OH_Bouts = do.call(rbind, lapply(1:dim(OH_BoutsPts)[1],
-                                             function(x)
-                                             {
-                                               st_sf(
-                                                 data.frame(
-                                                   NumOH = OH_BoutsPts[x, 3],
-                                                   ES = OH_BoutsPts[x, 4],
-                                                   "geometry" =
-                                                     st_sfc(st_point(OH_BoutsPts[x, 1:2], dim = "XY"))
-                                                 ),
-                                                 crs = EPSG
-                                               )
-                                             }))
-            
-            # parametres à sortir
-            BufOH_Bouts=contour$Exz1_Dx
-            
-            OH_Bouts_Buf=st_union(st_buffer(OH_Bouts, BufOH_Bouts))
-            # calcul des morceaux de lignes coupés
-            # S'ils sont trop petits, il faut élargir la zone supprimée
-            # sinon possible maillage trop petit
-            LigContr_Supp=st_intersection(LigContr,OH_Bouts_Buf)
-            if (dim(LigContr_Supp)[1]>0)
-            {
-              LigContr_Supp=st_cast(st_cast(LigContr_Supp,"MULTILINESTRING"),"LINESTRING")
-              
-              LigContr_Supp$longueur=st_length(LigContr_Supp)
-              units(LigContr_Supp$longueur)=NULL
-              nbtropcourt=which(LigContr_Supp$longueur<2/3*BufOH_Bouts)
-              if (length(nbtropcourt)>0)
-              {
-                OH_Bouts_Buf=st_union(OH_Bouts_Buf,
-                                      st_union(st_buffer(LigContr_Supp[nbtropcourt,],1/3*BufOH_Bouts)))
-                # st_write(
-                #   OH_Bouts_Buf,
-                #   dsn = file.path(dsnlayerC, "OH_Bouts_Buf.gpkg"),
-                #   delete_layer = T,
-                #   quiet = T
-                # )
-                # 
-                # st_write(
-                #   st_union(st_buffer(LigContr_Supp[nbtropcourt,],1/3*BufOH_Bouts)),
-                #   dsn = file.path(dsnlayerC, "nbtropcourt.gpkg"),
-                #   delete_layer = T,
-                #   quiet = T
-                # )
-                # 
-                # st_write(
-                #   LigContr_Supp[nbtropcourt,],
-                #   dsn = file.path(dsnlayerC, "lignetropcourt.gpkg"),
-                #   delete_layer = T,
-                #   quiet = T
-                # )
-                # 
-                # st_write(
-                #   LigContr_Supp,
-                #   dsn = file.path(dsnlayerC, "lignetoute.gpkg"),
-                #   delete_layer = T,
-                #   quiet = T
-                # )
-              }else{
-              }
+            # Nettoyage des points de contrainte près des buses
+            Pool_OH_Total <- if(exists("Aj_Pts") && !is.null(Aj_Pts)) rbind(Pts_Fixes_OH, Aj_Pts) else Pts_Fixes_OH
+            if (!is.null(Pool_OH_Total) && nrow(Pool_OH_Total) > 0) {
+              LigContr_Pts = GardeNvxPointsLoinPointsInitiaux(LigContr_Pts, Pool_OH_Total, 1.0, contour$Exz1_Dx)
             }
             
-            # st_erase = function(x, y)
-            #   st_difference(x, st_union(st_combine(y)))
-            # 
-            # LigContr <-
-            #   st_cast(st_cast(st_erase(
-            #     LigContr, st_union(st_buffer(OH_Bouts, 3))
-            #   ), "MULTILINESTRING"),
-            #   "LINESTRING")
-            
-            # On ne garde que les morceaux de ligne eloigne des bouts des OH
-            LigContr <-
-              st_cast(st_cast(st_difference(
-                LigContr, st_union(st_combine(OH_Bouts_Buf))
-              ), "MULTILINESTRING"),
-              "LINESTRING")
-            
-            # st_write(
-            #   st_geometry(LigContr),
-            #   dsn = file.path(dsnlayerC, "LigContr_Selectvf.gpkg"),
-            #   delete_layer = T,
-            #   quiet = T
-            # )
+            if (nrow(LigContr_Pts) > 0) {
+              cat("   -> Intégration de", nrow(LigContr_Pts), "points de contrainte...\n")
+              # Filtrage interne des contraintes pour supprimer les points trop proches (< 1.29m)
+              LigContr_Pts <- FiltreParBlocs(LigContr_Pts, 1.29)
+              
+              # Nettoyage terrain vs contrainte
+              Exz_Pts = GardeNvxPointsLoinPointsInitiaux(Exz_Pts, LigContr_Pts, 0.5, contour$Exz1_Dx)
+              Exz_Pts = rbind(Exz_Pts, LigContr_Pts)
+            }
           }
-          LigContr$Longueur = st_length(LigContr)
-          
-          # On coup en tres petits morceaux les lignes
-          LigC_Dx = 0.85 * contour$Exz1_Dx
-          pasinter = 0.1
-          Simple2 = st_segmentize(
-            st_simplify(
-              LigContr,
-              preserveTopology = FALSE,
-              dTolerance = 0.05
-            ),
-            pasinter
-          )
-          Simple2$Longeur = st_length(Simple2)
-          Seuil = 4 / 5 * LigC_Dx
-          units(Seuil) = "m"
-          Simple2 = Simple2[which(Simple2$Longueur > Seuil),]
-          
-          XYaj = list()
-          XYaj2 = list()
-          
-          for (ipt in 1:dim(Simple2)[1])
-          {
-            # plot(Simple2[ipt,1])
-            # st_write(
-            #   Simple2[ipt,1],
-            #   dsn = file.path(dsnlayerC, paste0("LigContr_Select",ipt,".gpkg")),
-            #   delete_layer = T,
-            #   quiet = T
-            # )
-            XY = cbind(as.data.frame(st_coordinates(Simple2[ipt,])), 0, 0)
-            XY[-1, 4] = sapply(2:dim(XY)[1], function(x) {
-              ((XY[x, 1] - XY[x - 1, 1]) ^ 2 + (XY[x, 2] - XY[x - 1, 2]) ^ 2) ^ 0.5
-            })
-            XY[, 5] = sapply(1:dim(XY)[1], function(x) {
-              sum(XY[1:x, 4])
-            })
-            # Calcul du nombre d intervalles entre 2 points pour les lignes de contraintes
-            Interva = ifelse(max(XY[, 5]) < 2 * contour$Exz1_Dx,
-                             2,
-                             ceiling((max(XY[, 5])) / LigC_Dx))
-            
-            IndGood = sapply(max(XY[, 5]) * seq(0, Interva, 1) / Interva,
-                             function (x) {
-                               which(abs(XY[, 5] - x) == min(abs(XY[, 5] - x)))[1]
-                             })
-            
-            XY = as.matrix(XY[IndGood,])
-            
-            # inc1=dim(XY)[1]
-            #   inc2=1
-            # while(((XY[1,inc1]-XY[inc2,1])^2+(XY[inc1,2]-XY[inc2,2])^2)^0.5<0.5*LigC_Dx)
-            # {
-            #   XY=XY[-dim(XY)[1],]
-            # }
-            
-            XYaj[[ipt]] = do.call(rbind, lapply(1:dim(XY)[1],
-                                                function(x)
-                                                {
-                                                  st_sf(data.frame(
-                                                    Num = x,
-                                                    "geometry" =
-                                                      st_sfc(st_point(XY[x, 1:2], dim = "XY"))
-                                                  ),
-                                                  crs = EPSG)
-                                                }))
-          }
-          LigContr_Pts = do.call(rbind, XYaj)
-          st_write(
-            LigContr_Pts,
-            dsn = file.path(dsnlayerC, "XYaj.shp"),
-            delete_layer = T,
-            quiet = T
-          )
-          
-          Exz_Dx <- contour$Exz1_Dx
-          
-          RatioLC = 2
-          
-          Exz_Pts = GardeNvxPointsLoinPointsInitiaux(Exz_Pts,
-                                                     st_coordinates(LigContr_Pts)[, 1:2],
-                                                     RatioLC,
-                                                     Exz_Dx)
-          
-          Exz_Pts = rbind(Exz_Pts, st_coordinates(LigContr_Pts)[, 1:2])
         }
       }
-      if (file.exists(file.path(dsnlayerC, "OuvHydrau_Select.shp")) == TRUE)
-      {
-        Exz_Pts = unique(rbind(Exz_Pts, OH_BoutsPts[, 1:2]))
-      }
     } else{
-      # Gestion des maillages s appuyant sur le raster
       Exz_Pts = NaN
     }
   }
-  # # Gestion des sections de controle
-  # source(paste(chem_routine,"\\C2D\\Cartino2D_Utilitaires.R",sep=""), encoding="utf-8")
-  # Gestion_Sections_Controle(dsnlayer,dsnlayerC,nom_SectCont,contour)
   
-  # return(list(Exz_Pts,contour_segm,contour_int))
+  # --- FILTRE 2 : FINAL PAR BLOCS (1.29m) ---
+  if (!all(is.na(Exz_Pts)) && is.matrix(Exz_Pts) && nrow(Exz_Pts) > 1) {
+    cat(nomcontour, " ---- Filtrage géographique final (< 1.29m)\n")
+    Exz_Pts <- FiltreParBlocs(Exz_Pts, 1.29)
+  }
+  
+  # --- RÉINTÉGRATION FINALE DES EXTRÉMITÉS OH (INTOUCHABLES) ---
+  if (nrow(Pts_Fixes_OH) > 0) {
+    Exz_Pts <- rbind(Pts_Fixes_OH, Exz_Pts)
+    cat("   -> Réintégration de", nrow(Pts_Fixes_OH), "points d'extrémités buses.\n")
+  }
+  
+  # Export final nettoyé
+  if (!all(is.na(Exz_Pts)) && nrow(Exz_Pts) > 0) {
+    cat("   -> Export final nettoyé vers 'Verif_Points_Filtres_129.gpkg'\n")
+    pts_filt_sf <- st_as_sf(data.frame(x = Exz_Pts[, 1], y = Exz_Pts[, 2]), coords = c("x", "y"), crs = crs)
+    st_write(pts_filt_sf, dsn = file.path(dsnlayerC, "Verif_Points_Filtres_129.gpkg"), delete_layer = TRUE, quiet = TRUE)
+  }
+  
   return(Exz_Pts)
 }
-
 #################################################################################################
 ################   Etape1_MNT
 #################################################################################################
+
 Etape1_MNT = function(dsnlayerC,
                       Lidar,
                       dsnLidar,
@@ -668,13 +555,12 @@ Etape1_MNT = function(dsnlayerC,
     
   }
   
-  
   # Creation du fichier virtuel
   nom_ascvrt = file.path(dsnlayerC, "listepourvrt.txt")
   file.create(nom_ascvrt)
   write(listeASC, file = nom_ascvrt, append = T)
   vrtfile = paste0(dsnlayerC, "\\", nom_MNT, ".vrt") ##chemin du vrt à créer
-  cmd = paste(shQuote(OSGeo4W_path),"gdalbuildvrt",vrtfile,"-input_file_list",nom_ascvrt)
+  cmd = paste(OSGeo4W_path,"gdalbuildvrt",vrtfile,"-input_file_list",nom_ascvrt)
   print(cmd);system(cmd)
   unlink(nom_ascvrt)
   
@@ -735,13 +621,23 @@ Etape1_MNT = function(dsnlayerC,
   cmd=paste0("r.mask --quiet --overwrite vector=",nom_STEP2_Zone_Valid_Calcul)
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
+  #----- supp 2026 04 16
   #----- 
-  NomUnivar = file.path(dsnlayerC, "univar.txt")
-  cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a," output=",NomUnivar)
-  print(cmd);toto=system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
-  if (toto!=0){cat("Vous avez un problème dans ",BatGRASS,"\n");BUGDEGRASS=BOOM}
-  MinimMNT =max(as.numeric(scan(file = NomUnivar,NomUnivar,sep = ":",skip = 6,nlines = 1,dec = ".")[2]),-50)
-  print(MinimMNT)
+  # NomUnivar = file.path(dsnlayerC, "univar.txt")
+  # cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a," output=",NomUnivar)
+  # print(cmd);toto=system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  # if (toto!=0){cat("Vous avez un problème dans ",BatGRASS,"\n");BUGDEGRASS=BOOM}
+  # MinimMNT =max(as.numeric(scan(file = NomUnivar,NomUnivar,sep = ":",skip = 6,nlines = 1,dec = ".")[2]),-50)
+  # print(MinimMNT)
+  #----- supp 2026 04 16
+  
+  # 2026 04 16
+  cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a)
+  print(cmd);toto=system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd),intern=T)
+  nlig=grep(toto,pattern="minimum: ")[1]
+  MinimMNT=as.numeric(strsplit(toto[nlig],":")[[1]][2])
+  cat(toto[nlig],"\n")
+  cat("Minimum Altitude: ",MinimMNT, "\n")
   
   # Creation d'un MNT à l'altitude mnimale
   MNTMini="MNTpourcomber"
@@ -893,12 +789,22 @@ Etape1_MNT = function(dsnlayerC,
     cmd=paste0("r.mask --quiet --overwrite vector=",nom_du_fichier_polyligne_buf)
     print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
     
-    NomUnivar = file.path(dsnlayerC, "univar.txt")
-    cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a," output=",NomUnivar)
-    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    #----- supp 2026 04 16
+    # NomUnivar = file.path(dsnlayerC, "univar.txt")
+    # cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a," output=",NomUnivar)
+    # print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    #     MinimMNT =max(as.numeric(scan(file = NomUnivar,NomUnivar,sep = ":",skip = 6,nlines = 1,dec = ".")[2]),-50)
+    # cat("Minimum de la zone valide",MinimMNT,"\n")
+    #----- supp 2026 04 16
     
-    MinimMNT =max(as.numeric(scan(file = NomUnivar,NomUnivar,sep = ":",skip = 6,nlines = 1,dec = ".")[2]),-50)
-    cat("Minimum de la zone valide",MinimMNT,"\n")
+    # 2026 04 16
+    cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a)
+    print(cmd);toto=system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd),intern=T)
+    nlig=grep(toto,pattern="minimum: ")[1]
+    MinimMNT=as.numeric(strsplit(toto[nlig],":")[[1]][2])
+    cat(toto[nlig],"\n")
+    cat("Minimum Altitude: ",MinimMNT, "\n")
+    
     
     nomPtsBas="PtsBas"
     cmd=paste0("r.mapcalc --overwrite ",shQuote(paste0(nomPtsBas,"=if(",nom_MNT2a," <(",max(contour$COTEAVALM, contour$COTEAVALAJ +MinimMNT),"),",1,',null())')))
@@ -957,12 +863,21 @@ Etape1_MNT = function(dsnlayerC,
     # modif FP objectif est de mettre d'avoir un mnt plein jusqu'à la limite du contour de calcul
     #----- Partie pour calculer l'altitude minimale dans tout le buffer
     #----- Future condition limite projeteée plus loin!
-    NomUnivar = file.path(dsnlayerC, "univar.txt")
-    cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a," output=",NomUnivar)
-    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    #----- supp 2026 04 16
+    # NomUnivar = file.path(dsnlayerC, "univar.txt")
+    # cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a," output=",NomUnivar)
+    # print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    #     MinimMNT =max(as.numeric(scan(file = NomUnivar,NomUnivar,sep = ":",skip = 6,nlines = 1,dec = ".")[2]),-50)
+    # print(MinimMNT)
+    #----- supp 2026 04 16
     
-    MinimMNT =max(as.numeric(scan(file = NomUnivar,NomUnivar,sep = ":",skip = 6,nlines = 1,dec = ".")[2]),-50)
-    print(MinimMNT)
+    # 2026 04 16
+    cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2a)
+    print(cmd);toto=system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd),intern=T)
+    nlig=grep(toto,pattern="minimum: ")[1]
+    MinimMNT=as.numeric(strsplit(toto[nlig],":")[[1]][2])
+    cat(toto[nlig],"\n")
+    cat("Minimum Altitude: ",MinimMNT, "\n")
     
     # Creation d'un MNT à l'altitude mnimale
     MNTMini="MNTpourcomber"
@@ -989,16 +904,27 @@ Etape1_MNT = function(dsnlayerC,
   cmd=paste0("r.mask --quiet --overwrite vector=",nom_STEP2_Zone_Valid_Calcul)
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
-  
+  #----- supp 2026 04 16
   NomUnivar = file.path(dsnlayerC, "univar.txt")
   cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2," output=",NomUnivar)
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
-  
   COTE_AVAL = max(contour$COTEAVALM,
-                  contour$COTEAVALAJ + 
+                  contour$COTEAVALAJ +
                     as.numeric(
                       scan(file = NomUnivar,NomUnivar,sep = ":",skip = 6,nlines = 1,dec = "."))[2])
   print(COTE_AVAL)
+  #----- supp 2026 04 16
+  
+  # 2026 04 16
+  cmd=paste0("r.univar --quiet --overwrite map=",nom_MNT2)
+  print(cmd);toto=system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd),intern=T)
+  nlig=grep(toto,pattern="minimum: ")[1]
+  MinimMNT=as.numeric(strsplit(toto[nlig],":")[[1]][2])
+  cat(toto[nlig],"\n")
+  cat("Minimum Altitude: ",MinimMNT, "\n")
+  COTE_AVAL = max(contour$COTEAVALM, contour$COTEAVALAJ + MinimMNT)
+  cat("COTE_AVAL: ",MinimMNT, "\n")
+  
   cmd=paste0("r.mask -r")
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
@@ -1082,6 +1008,7 @@ Etape1_MNT = function(dsnlayerC,
                                                   st_sf(data.frame(
                                                     Z = OuvHydrau$Z1[x],
                                                     LRG = OuvHydrau$LRG[x],
+                                                    LENGTH = OuvHydrau$LENGTH[x], # AJOUT
                                                     "geometry" =
                                                       st_sfc(st_point(st_coordinates(OuvHydrau[x,])[1, 1:2]), dim = "XY")
                                                   ),
@@ -1094,6 +1021,7 @@ Etape1_MNT = function(dsnlayerC,
                                                   st_sf(data.frame(
                                                     Z = OuvHydrau$Z2[x],
                                                     LRG = OuvHydrau$LRG[x],
+                                                    LENGTH = OuvHydrau$LENGTH[x], # AJOUT
                                                     "geometry" =
                                                       st_sfc(st_point(st_coordinates(OuvHydrau[x,])[dim(st_coordinates(OuvHydrau[x,]))[1], 1:2]), dim =
                                                                "XY")
@@ -1103,13 +1031,15 @@ Etape1_MNT = function(dsnlayerC,
       
       # Calcul de la taille de buffer a l entonnement et a la sortie
       RatioLRG = 2 / 3
-      bufMin = 4 / 3 * contour$Exz1_Dx # modifier avec la taille de la maille pour faire en format grille
-      bufMax = 2 * contour$Exz1_Dx
+      # bufMin = 5
+      bufMin = contour$Exz1_Dx-0.5 # modifier avec la taille de la maille pour faire en format grille
+      # bufMax = 5 #* contour$Exz1_Dx
+      bufMax = 4 / 3 * (contour$Exz1_Dx)-0.5
       bufMaxu = bufMax
       units(bufMaxu) <- "m"
       
       # Gestion de points proches pour prendre le min
-      Descendre = 1
+      Descendre = 25
       OuvHydrau_PtDebFin$Z = sapply(1:dim(OuvHydrau_PtDebFin)[1], function(x) {
         min(OuvHydrau_PtDebFin[which(st_distance(OuvHydrau_PtDebFin, OuvHydrau_PtDebFin[x,]) <
                                        bufMaxu),]$Z)
@@ -1117,6 +1047,13 @@ Etape1_MNT = function(dsnlayerC,
       
       # buffer sur les points
       buf = sapply(1:dim(OuvHydrau_PtDebFin)[1], function(x) {
+        # --- DEBUT MODIF : Taille du buffer variable selon longueur ---
+        L = as.numeric(OuvHydrau_PtDebFin$LENGTH[x])
+        if (!is.na(L) && L <= 12) {
+          if (L < 8) return(1.5)
+          if (L >= 8) return(2.0)
+        }
+        # --- FIN MODIF ---
         min(max(OuvHydrau_PtDebFin$LRG[x] * RatioLRG, bufMin),
             bufMax)
       })
@@ -1152,7 +1089,7 @@ Etape1_MNT = function(dsnlayerC,
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
   MNTFinalRond="MNTFinalRond"
-  # r.mapcalc expression=MNTFinalRond = 0.01*round( 100*MNTFinal@Temp )             
+  # r.mapcalc expression=MNTFinalRond = 0.01*round( 100*MNTFinal@Temp )              
   cmd=paste0("r.mapcalc --quiet --overwrite ",
              MNTFinalRond,"=0.01*round(100*",nom_MNT4,")")
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
@@ -1189,11 +1126,11 @@ Etape1_MNT = function(dsnlayerC,
   cmd=paste0("r.out.gdal --quiet --overwrite -c -f input=",MNTFinalRond," output=",paste0(dsnlayerC, "/", "MNTFinal", ".gpkg")," type=Float32 format=GPKG nodata=-9999")
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))  
   
-  # Export
+  # Lignes 1073-1076 de Cartino2D_Etape01_Contrainte_MNT_GEO.R :
   nomcsv = paste0(dsnlayerC, "/", nom_MNT, ".csv")
-  cmd=paste0("r.out.xyz --quiet --overwrite input=",MNTFinalRond," output=",nomcsv," separator=comma")
-  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
-  
+  # cmd = paste0("r.out.xyz --quiet --overwrite input=", MNTFinalRond, " output=", nomcsv, " separator=comma")
+  # print(cmd); system(paste0(BatGRASS, " ", SecteurGRASS, " --exec ", cmd))
+  fun_export_csv_grass(MNTFinalRond, nomcsv, SecteurGRASS, BatGRASS)
   # Gestion des CN et Friction
   if (is.na(as.numeric(contour$CN)) == TRUE)
   {
@@ -1373,7 +1310,7 @@ Etape1_CNFriction = function(NomParamH,
   nb = st_intersects(ParamH, contour_segm)
   n_int = which(sapply(nb, length) > 0)
   ParamHC = ParamH[n_int,]
-  nomcsv = paste0(dsnlayerC, "/", "MNT", ".csv")
+  
   # Création de la liste des dalles concernées
   ListeParamH = paste0(dsnParamH, '/', ParamHC$DOSSIERASC, '/', ParamHC$NOM_ASC)
   
@@ -1382,7 +1319,7 @@ Etape1_CNFriction = function(NomParamH,
   file.create(nom_vrt)
   write(ListeParamH, file = nom_vrt, append = T)
   vrtfile = paste0(dsnlayerC, "/", NomParamH, ".vrt") ##chemin du vrt à créer
-  cmd = paste(shQuote(OSGeo4W_path),
+  cmd = paste(OSGeo4W_path,
               "gdalbuildvrt",
               vrtfile,
               "-input_file_list",
@@ -1394,13 +1331,12 @@ Etape1_CNFriction = function(NomParamH,
   cat(nomcontour, " ---- Travail du lidar dans Grass\n")
   cmd=paste0("r.in.gdal -o --quiet --overwrite input=",vrtfile," output=",NomParamH)
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
-  cmd=paste0("r.in.xyz --quiet --overwrite input=",nomcsv," output=","MNTxyzmask"," separator=comma")
-  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
-  cmd=paste0("g.region --overwrite --quiet"," raster=","MNTxyzmask")
+  
+  cmd=paste0("g.region --overwrite --quiet"," raster=","MNTFinal")
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
   # masque sur le grand contour
-  cmd=paste0("r.mask --quiet --overwrite raster=MNTxyzmask")
+  cmd=paste0("r.mask --quiet --overwrite raster=MNTFinal")
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
   if (is.na(as.numeric(contour$Exzeco))==F)
@@ -1426,15 +1362,18 @@ Etape1_CNFriction = function(NomParamH,
   NomParamH_patch=paste0(NomParamH,"Patch")
   cmd=paste0("r.patch --quiet --overwrite ","input=",NomParamH_,",",NomParamH_Vide," output=",NomParamH_patch," nprocs=",NProcGrass)
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
-  
-  
-  nomcsv = paste0(dsnlayerC, "/", NomParamH, ".csv")
-  cmd=paste0("r.out.xyz --quiet --overwrite input=",NomParamH_patch," output=",nomcsv," separator=comma")
-  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
-  
-  # nomcsv = paste0(dsnlayerC, "/", NomParamH, ".csv")
 
   
+  nomcsv = paste0(dsnlayerC, "/", NomParamH, ".csv")
+  # cmd = paste0("r.out.xyz --quiet --overwrite input=", NomParamH_patch, " output=", nomcsv, " separator=comma")
+  # print(cmd); system(paste0(BatGRASS, " ", SecteurGRASS, " --exec ", cmd))
+  fun_export_csv_grass(NomParamH_patch, nomcsv, SecteurGRASS, BatGRASS)
+  # Sécurité : si GRASS a eu un hoquet, on retente une fois après une micro-pause
+  if (!file.exists(nomcsv)) {
+    cat(">>> Tentative de récupération pour :", nomcsv, "\n")
+    Sys.sleep(0.5)
+    system(paste0(BatGRASS, " ", SecteurGRASS, " --exec ", cmd))
+  }
 }
 
 Etape1_fn <- function(skip_to_next)
@@ -1445,8 +1384,7 @@ Etape1_fn <- function(skip_to_next)
     cat("ETAPE 1 - Traitement de: ",contour$NOM,"\n")
     #Creation d'un monde GRASS
     unlink(dirname(SecteurGRASS),recursive=TRUE)
-    toto=system(paste0(BatGRASS," -c EPSG:",shQuote(EPSG)," ",dirname(SecteurGRASS)," --text"))
-    if (toto!=0){cat("Vous avez un problème dans ",BatGRASS,"\n");BUGDEGRASS=BOOM}
+    toto=system(paste0(BatGRASS," -c EPSG:",EPSG," ",dirname(SecteurGRASS)," --text"))
     system(paste0(BatGRASS," -c ",SecteurGRASS," --text"))
     cat("\014")
     cat("ETAPE 1 - Traitement de: ",contour$NOM,"\n")
@@ -1474,8 +1412,12 @@ Etape1_fn <- function(skip_to_next)
     # 
     # Etape1_MNT(dsnlayerC, Lidar,dsnLidar, contour_segm, contour_int)
     Exz_Pts = Etape1_Exzeco(dsnlayer, contour,contour_int,Contoursanstrou, crs)
+    
     Etape1_MNT(dsnlayerC, Lidar,dsnLidar, contour_segm, contour_int)
     
+    
+    # Etape1_MNT(dsnlayerC, Lidar,dsnLidar, contour_segm, contour_int)
+    # Exz_Pts = Etape1_Exzeco(dsnlayer, contour,contour_int,Contoursanstrou, crs)
     
     
     
@@ -1500,21 +1442,138 @@ Etape1_fn <- function(skip_to_next)
 }
 
 
+# Etape1_fn_parallel <- function()
+# {
+#   if (ETAPE[1] == 1)
+#   {
+#     cat("\014")
+#     cat("ETAPE 1 - Traitement de: ",contour$NOM,"\n")
+#     #Creation d'un monde GRASS
+#     # unlink(dirname(SecteurGRASS),recursive=TRUE)
+#     # toto=system(paste0(BatGRASS," -c EPSG:",EPSG," ",dirname(SecteurGRASS)," --text"))
+#     # system(paste0(BatGRASS," -c ",SecteurGRASS," --text"))
+#     loc_path = dirname(SecteurGRASS)
+#     
+#     # Nettoyer puis créer la Location avec la projection EPSG
+#     unlink(loc_path, recursive = TRUE)
+#     system(paste0(BatGRASS, " -c EPSG:", EPSG, " -e \"", loc_path, "\""))
+#     cat("\014")
+#     
+#     
+#     loc_path = dirname(SecteurGRASS)
+#     
+#     # Tentative de création avec reprise automatique si échec
+#     dossier_cree = FALSE
+#     tentative = 1
+#     
+#     while (!dossier_cree && tentative <= 3) {
+#       # Nettoyage si un résidu existe
+#       if (dir.exists(loc_path)) {
+#         unlink(loc_path, recursive = TRUE)
+#       }
+#       
+#       # Création de la Location GRASS
+#       system(paste0(BatGRASS, " -c EPSG:", EPSG, " -e \"", loc_path, "\""))
+#       
+#       # Petite pause de 1 seconde pour laisser le système de fichiers valider l'écriture
+#       Sys.sleep(1)
+#       
+#       if (dir.exists(loc_path)) {
+#         dossier_cree = TRUE
+#       } else {
+#         cat("[Tentative", tentative, "] Échec création Location pour :", loc_path, "- Nouvelle tentative...\n", 
+#             file = file.path(SecteurGRASS_,"erreurs_grass.txt", append = TRUE))
+#         Sys.sleep(2)  # Pause avant de réessayer
+#         tentative = tentative + 1
+#       }
+#     }
+#     
+#     if (!dossier_cree) {
+#       stop(paste("ERREUR FATALE : Impossible de créer la Location GRASS après 3 tentatives :", loc_path))
+#     }
+#     
+#     cat("ETAPE 1 - Traitement de: ",contour$NOM,"\n")
+#     # Ouverture Table Assemblage Lidar
+#     fun_check_exist(contour$MNT,1)
+#     dsnLidar = dirname(contour$MNT)
+#     Lidar <- st_read(contour$MNT)
+#     
+#     st_crs(Lidar) = crs
+#     
+#     # Copie du dossier base dans dossier export
+#     copie_prerequis()
+#     
+#     # Fichier utilisé à cette étape
+#     # Travail sur les contours d'Exzeco pour réaliser les points de contrainte et sur les limites du domaine
+#     # Gestion des maillages s'appuyant sur Exzeco
+#     # system.time(Etape1_Exzeco(dsnlayer, contour, crs))
+#     resultat = Etape1_Contour(dsnlayer, contour, crs)
+#     contour_segm = resultat[[1]]
+#     contour_int = resultat[[2]]
+#     Contoursanstrou= resultat[[3]]
+#     
+#     
+#     Exz_Pts = Etape1_Exzeco(dsnlayer, contour,contour_int,Contoursanstrou, crs)   
+#     Etape1_MNT(dsnlayerC, Lidar,dsnLidar, contour_segm, contour_int)
+# 
+#     # Travail sur le MNT pour récupérer les données et gérer une décroissance de la topo aux frontières
+#     # Etape1_MNT(dsnlayerC, Lidar,dsnLidar,Exz_Pts, contour_segm, contour_int)
+#     
+#     
+#     cat("c est ok", "\n")
+#     
+#     if (is.na(Exz_Pts)[1] == FALSE)
+#     {
+#       # Création du fichier geo fichier d'entrée pour le mailleur GMSH
+#       Etape1_GEO(dsnlayerC, Exz_Pts)
+#     }
+#     # cat("\014")
+#     
+#     unlink(dirname(SecteurGRASS),recursive=TRUE)
+#     
+#   }
+# }
 Etape1_fn_parallel <- function()
 {
   if (ETAPE[1] == 1)
   {
     cat("\014")
-    cat("ETAPE 1 - Traitement de: ",contour$NOM,"\n")
-    #Creation d'un monde GRASS
-    unlink(dirname(SecteurGRASS),recursive=TRUE)
-    toto=system(paste0(BatGRASS," -c EPSG:",EPSG," ",dirname(SecteurGRASS)," --text"))
-    if (toto!=0){cat("Vous avez un problème dans ",BatGRASS,"\n");BUGDEGRASS=BOOM}
-    system(paste0(BatGRASS," -c ",SecteurGRASS," --text"))
-    cat("\014")
-    cat("ETAPE 1 - Traitement de: ",contour$NOM,"\n")
+    cat("ETAPE 1 - Traitement de: ", contour$NOM, "\n")
+    
+    # --- CREATION SECURISEE DU MONDE GRASS ---
+    loc_path = dirname(SecteurGRASS)
+    dossier_cree = FALSE
+    tentative = 1
+    
+    while (!dossier_cree && tentative <= 3) {
+      # Nettoyage si un résidu existe
+      if (dir.exists(loc_path)) {
+        unlink(loc_path, recursive = TRUE)
+      }
+      
+      # Création de la Location GRASS
+      system(paste0(BatGRASS, " -c EPSG:", EPSG, " -e \"", loc_path, "\""))
+      
+      # Petite pause pour laisser Windows valider l'écriture du dossier sur disque
+      Sys.sleep(1)
+      
+      if (dir.exists(loc_path)) {
+        dossier_cree = TRUE
+      } else {
+        cat(paste0("[Tentative ", tentative, "] Échec création Location pour : ", loc_path, " - Nouvelle tentative...\n"), 
+            file = file.path(SecteurGRASS_, "erreurs_grass.txt"), append = TRUE)
+        Sys.sleep(2)  # Pause avant de réessayer
+        tentative = tentative + 1
+      }
+    }
+    
+    if (!dossier_cree) {
+      stop(paste("ERREUR FATALE : Impossible de créer la Location GRASS après 3 tentatives :", loc_path))
+    }
+    
+    cat("ETAPE 1 - Traitement de: ", contour$NOM, "\n")
     # Ouverture Table Assemblage Lidar
-    fun_check_exist(contour$MNT,1)
+    fun_check_exist(contour$MNT, 1)
     dsnLidar = dirname(contour$MNT)
     Lidar <- st_read(contour$MNT)
     
@@ -1524,21 +1583,13 @@ Etape1_fn_parallel <- function()
     copie_prerequis()
     
     # Fichier utilisé à cette étape
-    # Travail sur les contours d'Exzeco pour réaliser les points de contrainte et sur les limites du domaine
-    # Gestion des maillages s'appuyant sur Exzeco
-    # system.time(Etape1_Exzeco(dsnlayer, contour, crs))
     resultat = Etape1_Contour(dsnlayer, contour, crs)
     contour_segm = resultat[[1]]
     contour_int = resultat[[2]]
-    Contoursanstrou= resultat[[3]]
+    Contoursanstrou = resultat[[3]]
     
-    Exz_Pts = Etape1_Exzeco(dsnlayer, contour,contour_int,Contoursanstrou, crs)
-    
-    Etape1_MNT(dsnlayerC, Lidar,dsnLidar, contour_segm, contour_int)
-    
-    # Travail sur le MNT pour récupérer les données et gérer une décroissance de la topo aux frontières
-    # Etape1_MNT(dsnlayerC, Lidar,dsnLidar,Exz_Pts, contour_segm, contour_int)
-    
+    Exz_Pts = Etape1_Exzeco(dsnlayer, contour, contour_int, Contoursanstrou, crs)   
+    Etape1_MNT(dsnlayerC, Lidar, dsnLidar, contour_segm, contour_int)
     
     cat("c est ok", "\n")
     
@@ -1547,9 +1598,9 @@ Etape1_fn_parallel <- function()
       # Création du fichier geo fichier d'entrée pour le mailleur GMSH
       Etape1_GEO(dsnlayerC, Exz_Pts)
     }
-    # cat("\014")
     
-    unlink(dirname(SecteurGRASS),recursive=TRUE)
+    # Nettoyage final du dossier GRASS
+    unlink(dirname(SecteurGRASS), recursive = TRUE)
     
   }
 }

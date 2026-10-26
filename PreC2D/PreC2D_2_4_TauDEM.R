@@ -1,6 +1,6 @@
 if (exists("PreC2D_03_TauDEM")==F)
 {
-  chem_routine=R.home(component = "cerema")
+  chem_routine=dirname(rstudioapi::getActiveDocumentContext()$path)
   Numero_de_calcul=1
   options(error=browser)
   ## VARIABLES A MODIFIER --------------------------------------------------------

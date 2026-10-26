@@ -103,7 +103,7 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
     colnames(listeEvt)="Nom"
     nEvt=nhist+dim(listeEvt)[1]
   }
-
+  
   motcleEvts=paste0("spatial_",as.character(contour$NOM),"_Evt")
   Type="Evts"
   listeEvts=data.frame(list.files(dsnPluie_tmp, pattern = motcleEvts))
@@ -250,13 +250,19 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
         name_split <- strsplit(Nom_Ent,"_")[[1]]
         
         DebutT=0
-        DUREE=as.numeric(substr(name_split[6],1,2))+as.numeric(substr(name_split[6],4,5))/60
         
+        duretevt=name_split[6]
+
+        strsplit(duretevt,"h")[[1]][1]
+        substr(strsplit(duretevt,"h")[[1]][2],1,2)
+        # DUREE=as.numeric(substr(name_split[6],1,2))+as.numeric(substr(name_split[6],4,5))/60
+        DUREE=as.numeric(strsplit(duretevt,"h")[[1]][1])+as.numeric(substr(strsplit(duretevt,"h")[[1]][2],1,2))/60
+        DUREE=DUREE+24
         aire=st_area(contour)
         # On rajoute du temps en fonction de la taille du Bv
         # si V=1.5m/s, en 1h sur un rectangle longuer 2 largeur 1
-        DUREE=round(12*(DUREE+as.numeric(as.character(aire))/(3600*1800)))/12
-        DUREE=max(DUREE,2)
+        # DUREE=round(12*(DUREE+as.numeric(as.character(aire))/(3600*1800)))/12
+        # DUREE=max(DUREE,2)
         DebutHour=floor(DebutT)
         DebutMin=round((DebutT-DebutHour)*60)
         FinHour=floor(DebutT+DUREE)
@@ -500,7 +506,8 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
         FormattedDataFile="FORMATTED DATA FILE 1 ="
       }else{
         Rep_USERFORTRAN="USER_FORTRAN_PS"
-        FormattedDataFile="FORMATTED DATA FILE 2 ="
+        FormattedDataFile="FORMATTED DATA FILE 1 ="
+        # FormattedDataFile="FORMATTED DATA FILE 2 ="
       }
       
       Changement=rbind(cbind("GEOMETRY FILE","GEOMETRY FILE            =",NOMSLF),
@@ -550,17 +557,34 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
       {
         OuvHydrau=st_read(dsn = dsnlayerC,
                           layer = "OuvHydrau_Select")
-        lg=length(Lignes)
-        
-        Lignes[lg+1]="/---------------------------------------------------------------------"
-        Lignes[lg+2]="/ TUBES"
-        Lignes[lg+3]="/---------------------------------------------------------------------"
-        Lignes[lg+4]="CULVERTS DATA FILE       ='OuvHydrau_Select.txt'"
-        Lignes[lg+5]=paste0("NUMBER OF CULVERTS                   = ",dim(OuvHydrau)[1])
-        Lignes[lg+6]="TYPE OF SOURCES : 1"
-        Lignes[lg+7]="OPTION FOR CULVERTS  = 2"
-        Lignes[lg+8]='TURBULENCE MODEL     =1'
-        Lignes[lg+9]='VELOCITY DIFFUSIVITY =1.E-2'
+        if(abaques==TRUE){
+          lg=length(Lignes)
+          
+          Lignes[lg+1]="/---------------------------------------------------------------------"
+          Lignes[lg+2]="/ TUBES"
+          Lignes[lg+3]="/---------------------------------------------------------------------"
+          Lignes[lg+4]="CULVERTS DATA FILE       ='OuvHydrau_Select.txt'"
+          Lignes[lg+5]="FORMATTED DATA FILE 2 =  'abaques2.txt'"
+          Lignes[lg+6]=paste0("NUMBER OF CULVERTS                   = ",dim(OuvHydrau)[1])
+          Lignes[lg+7]="TYPE OF SOURCES : 1"
+          Lignes[lg+8]="OPTION FOR CULVERTS  = 2"
+          Lignes[lg+9]='TURBULENCE MODEL     =1'
+          Lignes[lg+10]='VELOCITY DIFFUSIVITY =1.E-2'
+        }else{
+          lg=length(Lignes)
+          
+          Lignes[lg+1]="/---------------------------------------------------------------------"
+          Lignes[lg+2]="/ TUBES"
+          Lignes[lg+3]="/---------------------------------------------------------------------"
+          Lignes[lg+4]="CULVERTS DATA FILE       ='OuvHydrau_Select.txt'"
+          Lignes[lg+5]=paste0("NUMBER OF CULVERTS                   = ",dim(OuvHydrau)[1])
+          Lignes[lg+6]="TYPE OF SOURCES : 1"
+          Lignes[lg+7]="OPTION FOR CULVERTS  = 2"
+          Lignes[lg+8]='TURBULENCE MODEL     =1'
+          Lignes[lg+9]='VELOCITY DIFFUSIVITY =1.E-2'
+        }
+
+
       }
 
       # Gestion des sections de controle
@@ -715,8 +739,8 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
                             as.numeric(substr(name_split[5],8,9)),";",
                             as.numeric(substr(name_split[5],10,11)))
         Lignes[lg+4]=paste0("ORIGINAL HOUR OF TIME =",
-                            as.numeric(substr(name_split[5],12,13)),";",
-                            as.numeric(substr(name_split[5],14,15)),";",0)
+                            as.numeric(ifelse(nchar(name_split[5])>13,substr(name_split[5],13,14),"0")),";",
+                            as.numeric(ifelse(nchar(name_split[5])>15,substr(name_split[5],15,16),"0")),";",0)
         
         
       }else if(Type=="EVTS"){
@@ -729,8 +753,8 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
                             as.numeric(substr(name_split[5],9,10)),";",
                             as.numeric(substr(name_split[5],11,12)))
         Lignes[lg+4]=paste0("ORIGINAL HOUR OF TIME =",
-                            as.numeric(substr(name_split[5],13,14)),";",
-                            as.numeric(substr(name_split[5],15,16)),";",0)
+                            as.numeric(ifelse(nchar(name_split[5])>13,substr(name_split[5],13,14),"0")),";",
+                            as.numeric(ifelse(nchar(name_split[5])>15,substr(name_split[5],15,16),"0")),";",0)
       }
       # browser()
       if (!(is.na(contour$SourceDeb) | nchar(contour$SourceDeb)==0))
@@ -805,6 +829,7 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
               }else{
                 # browser()
                 DSour=cbind(DSour,DSour[,1])
+                if (nrow(DSour)!=nrow(ficiLF)){cat("Vous n'avez pas la même longueur dans vos données débits (pas de temps différent...)\n");browser()}
                 DSour[,iLF+1]=as.numeric(ficiLF[,2])
                 titcol1=paste(titcol1,paste0("Q(",iLF,")"))
                 titcol2=paste(titcol2,"m3/s")
@@ -1060,12 +1085,22 @@ Etape4_fn <- function(){
       cat("ETAPE 4 - Traitement de: ",contour$NOM,"\n")
       
       name_cas_all <- c()
-      
+      if(abaques==TRUE){
+        if(file.exists(file.path(dsnlayerC,"OuvHydrau_Select.txt"))){
+        source(file.path(chem_routine,"C2D","Cartino2D_Etape04_abaques.R"))
+        abacus()
+        }
+      }
       cas_name_ <- Etape4_Cas_Hyeto(dsnlayerC, nom_Cas, dsnPluie, contour)
       name_cas_all <- append(name_cas_all,cas_name_)
       
       if(file.exists(file.path(dsnlayerC,"casfiles.txt"))) file.remove(file.path(dsnlayerC,"casfiles.txt"))
       writeLines(name_cas_all,file.path(dsnlayerC,"casfiles.txt"))
+      if(OH_verif==TRUE){
+        
+        verifhaut()
+        
+      }
     }}, error = function(e) {skip_to_next <<- TRUE})
   
   return(skip_to_next)
@@ -1082,6 +1117,14 @@ Etape4_fn_parallel <- function(){
     cas_name_ <- Etape4_Cas_Hyeto(dsnlayerC, nom_Cas, dsnPluie, contour)
     name_cas_all <- append(name_cas_all,cas_name_)
     if(file.exists(file.path(dsnlayerC,"casfiles.txt"))) file.remove(file.path(dsnlayerC,"casfiles.txt"))
+    
     writeLines(name_cas_all,file.path(dsnlayerC,"casfiles.txt"))
+    if(OH_verif==TRUE){
+
+      verifhaut()
+      
+    }
+    
+    
   }
 }

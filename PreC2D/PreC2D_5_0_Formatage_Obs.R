@@ -11,7 +11,7 @@ library(foreach)
 #modif R
 
 chem_routine=dirname(rstudioapi::getActiveDocumentContext()$path)
-# chem_routine=R.home(component = "Cerema")
+# chem_routine=dirname(rstudioapi::getActiveDocumentContext()$path)
 chemsource <- file.path(chem_routine,"PreC2D_Outils.R")
 source(chemsource)
 ListeObs=DataObs_choix()

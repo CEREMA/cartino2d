@@ -75,177 +75,6 @@ Etape2_Maillage_Grille=function()
     print("ATTENTION GRANDES COORDONNEES DECALAGE DE 0.5")
   }
   
-  # Analyse des lignes hautes
-  # for (HB in c(1,2))
-  # {
-  #   Verif=1
-  #   while (Verif==1)
-  #   { 
-  #     # Si ca plante par là il y a des piels seuls au début et fin
-  #     Verif=0
-  #     YHB=ifelse(HB==1,min(Cor_zz[,2]),max(Cor_zz[,2]))
-  #     nVal=which(Cor_zz[,2]==YHB)
-  #     if (length(nVal)<=1)
-  #     {
-  #       # Suppression d'un point isolé
-  #       Cor_zz=Cor_zz[-nVal,]
-  #       Verif=1
-  #     }else{
-  #       if (length(which(nVal[2:length(nVal)]-nVal[1:(length(nVal)-1)]==1))==0)
-  #       {
-  #         Cor_zz=Cor_zz[-nVal,] # FRED on pourrrait supprimer que les pixels isolés...
-  #         Verif=1
-  #       }
-  #     }
-  #   }
-  # }
-  ################nouvelle méthode###################################################
-  ######################################################################################
-  # Script R pour supprimer les points de bordure non supportés par des lignes d'au moins 3 points
-  # LOGIQUE MODIFIÉE: un point de bordure est supprimé s'il manque de support en X OU en Y.
-  # VERSION OPTIMISÉE: Utilisation d'opérations vectorielles pour accélérer le traitement.
-  # Optimisation supplémentaire: Préparation plus rapide des clés de points existants.
-  
-  # # Charger les données du MNT
-  # tryCatch({
-  #   dtm_data <- read.csv(file.path(dsnlayerC,"MNT.csv"), header = FALSE, col.names = c("X", "Y", "Z"))
-  #   cat("Données MNT chargées avec succès :", nrow(dtm_data), "points initiaux.\n")
-  # }, error = function(e) {
-  #   stop("Erreur lors de la lecture du fichier MNT.csv : ", e$message, 
-  #        "\nVérifiez que le fichier existe et est au bon format.")
-  # })
-  # 
-  # # --- Détermination de la résolution du MNT ---
-  # sorted_x <- sort(unique(dtm_data$X))
-  # sorted_y <- sort(unique(dtm_data$Y))
-  # 
-  # if (length(sorted_x) <= 1 || length(sorted_y) <= 1) {
-  #   stop("Pas assez de coordonnées X ou Y uniques pour déterminer la résolution.")
-  # }
-  # 
-  # diff_x <- diff(sorted_x)
-  # diff_y <- diff(sorted_y)
-  # res_x <- min(diff_x[diff_x > 1e-9])
-  # res_y <- min(diff_y[diff_y > 1e-9])
-  # 
-  # if (!is.finite(res_x) || !is.finite(res_y) || res_x <= 1e-9 || res_y <= 1e-9) {
-  #   stop("Impossible de déterminer une résolution valide. Vérifiez les coordonnées.")
-  # }
-  # 
-  # cat("Résolution X déterminée :", res_x, "\n")
-  # cat("Résolution Y déterminée :", res_y, "\n")
-  # 
-  # # Déplacements pour les 8 voisins (défini une seule fois)
-  # dx_8_neighbors <- c(0,  res_x, res_x, res_x, 0, -res_x, -res_x, -res_x)
-  # dy_8_neighbors <- c(res_y, res_y, 0, -res_y, -res_y, -res_y, 0, res_y)
-  # 
-  # # --- Processus itératif de suppression ---
-  # current_dtm <- dtm_data
-  # points_removed_total <- 0
-  # iteration_count <- 0
-  # max_iterations <- 100 
-  # 
-  # repeat {
-  #   iteration_count <- iteration_count + 1
-  #   cat("\n--- Itération:", iteration_count, "---\n")
-  #   
-  #   num_points_start_iter <- nrow(current_dtm)
-  #   if (num_points_start_iter == 0) {
-  #     cat("Aucun point restant dans le MNT.\n")
-  #     break
-  #   }
-  #   cat("Nombre de points au début de l'itération :", num_points_start_iter, "\n")
-  #   
-  #   # 1. Obtenir les clés de tous les points MNT actuels pour la recherche rapide
-  #   # Ces clés sont simplement les combinaisons "X_Y" des points existants.
-  #   # L'environnement n'est plus nécessaire ici car toutes les vérifications utilisent `%in%`.
-  #   all_current_point_keys <- paste(current_dtm$X, current_dtm$Y, sep = "_")
-  #   # Optionnel: s'assurer de l'unicité si current_dtm pourrait avoir des doublons X,Y.
-  #   # Normalement, current_dtm devrait contenir des points uniques (X,Y).
-  #   # Si l'unicité n'est pas garantie à 100%, décommentez la ligne suivante :
-  #   # all_current_point_keys <- unique(all_current_point_keys)
-  #   
-  #   # 2. Comptage vectorisé des voisins
-  #   num_8_neighbors_vec <- numeric(num_points_start_iter)
-  #   for (j_neighbor in 1:8) { # Petite boucle (8 itérations) sur les directions des voisins
-  #     neighbor_x_coords <- current_dtm$X + dx_8_neighbors[j_neighbor]
-  #     neighbor_y_coords <- current_dtm$Y + dy_8_neighbors[j_neighbor]
-  #     neighbor_keys <- paste(neighbor_x_coords, neighbor_y_coords, sep = "_")
-  #     # Vérification vectorisée de l'existence des clés
-  #     exists_flags <- neighbor_keys %in% all_current_point_keys 
-  #     num_8_neighbors_vec <- num_8_neighbors_vec + exists_flags
-  #   }
-  #   
-  #   # Identifier les points de bordure (ceux avec < 8 voisins)
-  #   is_border_point_vec <- num_8_neighbors_vec < 8
-  #   
-  #   # Initialiser le vecteur des points à supprimer (tous à FALSE au début)
-  #   points_to_remove_flags <- logical(num_points_start_iter) 
-  #   
-  #   # Obtenir les indices des points de bordure dans current_dtm
-  #   border_point_indices_in_current_dtm <- which(is_border_point_vec)
-  #   
-  #   if (length(border_point_indices_in_current_dtm) > 0) {
-  #     # Coordonnées des points de bordure uniquement
-  #     border_px <- current_dtm$X[border_point_indices_in_current_dtm]
-  #     border_py <- current_dtm$Y[border_point_indices_in_current_dtm]
-  #     
-  #     # Fonction utilitaire pour vérifier l'existence de points (vectorisée)
-  #     # Elle prend maintenant `all_current_point_keys` comme référence.
-  #     check_points_exist_vectorized <- function(x_coords, y_coords, existing_point_keys_vec) {
-  #       keys <- paste(x_coords, y_coords, sep = "_")
-  #       keys %in% existing_point_keys_vec
-  #     }
-  #     
-  #     # Vérification du support en X pour les points de bordure
-  #     bp_m1_x_exists <- check_points_exist_vectorized(border_px - res_x, border_py, all_current_point_keys)
-  #     bp_p1_x_exists <- check_points_exist_vectorized(border_px + res_x, border_py, all_current_point_keys)
-  #     bp_m2_x_exists <- check_points_exist_vectorized(border_px - 2 * res_x, border_py, all_current_point_keys)
-  #     bp_p2_x_exists <- check_points_exist_vectorized(border_px + 2 * res_x, border_py, all_current_point_keys)
-  #     
-  #     border_supported_in_x <- (bp_m1_x_exists & bp_p1_x_exists) | 
-  #       (bp_m1_x_exists & bp_m2_x_exists) | 
-  #       (bp_p1_x_exists & bp_p2_x_exists)    
-  #     
-  #     # Vérification du support en Y pour les points de bordure
-  #     bp_m1_y_exists <- check_points_exist_vectorized(border_px, border_py - res_y, all_current_point_keys) 
-  #     bp_p1_y_exists <- check_points_exist_vectorized(border_px, border_py + res_y, all_current_point_keys) 
-  #     bp_m2_y_exists <- check_points_exist_vectorized(border_px, border_py - 2 * res_y, all_current_point_keys) 
-  #     bp_p2_y_exists <- check_points_exist_vectorized(border_px, border_py + 2 * res_y, all_current_point_keys) 
-  #     
-  #     border_supported_in_y <- (bp_m1_y_exists & bp_p1_y_exists) | 
-  #       (bp_m1_y_exists & bp_m2_y_exists) | 
-  #       (bp_p1_y_exists & bp_p2_y_exists)    
-  #     
-  #     # Identifier les points de bordure à supprimer (manque de support en X OU en Y)
-  #     border_points_to_remove_subset_flags <- (!border_supported_in_x | !border_supported_in_y)
-  #     
-  #     # Mettre à jour le vecteur principal points_to_remove_flags
-  #     # Seuls les points de bordure qui satisfont la condition de suppression sont marqués TRUE
-  #     points_to_remove_flags[border_point_indices_in_current_dtm[border_points_to_remove_subset_flags]] <- TRUE
-  #   }
-  #   
-  #   num_removed_this_iteration <- sum(points_to_remove_flags)
-  #   
-  #   if (num_removed_this_iteration == 0) {
-  #     cat("Aucun point de bordure non supporté (selon la logique OU) à supprimer. Le processus est terminé.\n")
-  #     break
-  #   } else {
-  #     cat("Itération", iteration_count, ": Suppression de", num_removed_this_iteration, "points (logique OU).\n")
-  #     current_dtm <- current_dtm[!points_to_remove_flags, ]
-  #     points_removed_total <- points_removed_total + num_removed_this_iteration
-  #     
-  #     if (nrow(current_dtm) == 0) {
-  #       cat("Tous les points ont été supprimés.\n")
-  #       break
-  #     }
-  #   }
-  #   
-  #   if (iteration_count >= max_iterations) {
-  #     cat("Attention : Nombre maximum d'itérations (", max_iterations, ") atteint. Arrêt du processus.\n")
-  #     break
-  #   }
-  # }
   # Ce script est une continuation, utilisant la variable 'current_dtm' 
   # issue du script de nettoyage de MNT précédent.
   # 'current_dtm' doit contenir les colonnes X, Y, Z.
@@ -550,7 +379,7 @@ Etape2_Maillage_Grille=function()
   } else {
     cat("\nLe MNT traité est vide, aucun fichier 'MNT_2.csv' n'a été créé.\n")
   }
-   # current_dtm2 <- read.csv(file.path(dsnlayerC,"MNT_2.csv"), header = FALSE)
+  # current_dtm2 <- read.csv(file.path(dsnlayerC,"MNT_2.csv"), header = FALSE)
   
   Cor_zz <- dtm_to_save
   names(Cor_zz) <- c("V1", "V2", "V3") # V1=X, V2=Y, V3=Z
@@ -795,199 +624,6 @@ Etape2_Maillage_Grille=function()
   
   # La suite de votre code utilise Ele_m
   cat("Nombre d'éléments (triangles) générés :", nrow(Ele_m), "\n")
-
-  
-  
-  
-  
-  
-  ########################################################################################
-  ########################################################################################
-  # Cor_zz <- Cor_zz %>% 
-  #   group_by(V2) %>% 
-  #   mutate(ds = c(diff(V1),NA))
-  # 
-  # if(length(which(Cor_zz$V2==Cor_zz$V2[1]))==1)
-  # {
-  #   Cor_zz <- Cor_zz[-1,]
-  # }
-  # if(length(which(Cor_zz$V2==Cor_zz$V2[length(Cor_zz$V2)]))==1)
-  # {
-  #   Cor_zz <- Cor_zz[-length(Cor_zz$V2),]
-  # }
-  # 
-  # Cor_zz$ID <- 1:length(Cor_zz$V1)
-  # reso_m <- as.numeric(contour$Exzeco)
-  # 
-  # header=c((max(Cor_zz[,1])-min(Cor_zz[,1]))/reso_m+1,
-  #          (max(Cor_zz[,2])-min(Cor_zz[,2]))/reso_m+1)
-  # 
-  # 
-  # # drix <- which(Cor_zz$ds>reso_m)
-  # # Iav=0
-  # # 
-  # # pgb <- txtProgressBar(min = 0, max = max(1,length(drix)),style=3)
-  # # for (slix in drix) 
-  # # {
-  # #   Iav=Iav+1
-  # #   setTxtProgressBar(pgb, Iav)
-  # #   if(slix> 1 &(Cor_zz[which(Cor_zz$ID==slix),5]>reso_m & is.na(Cor_zz[which(Cor_zz$ID==(slix-1)),5]))){
-  # #     Cor_zz = Cor_zz[-which(Cor_zz$ID==slix),]
-  # #   }
-  # #   else if(slix> 1 &(Cor_zz[which(Cor_zz$ID==slix),5]>reso_m & is.na(Cor_zz[which(Cor_zz$ID==(slix+1)),5]))){
-  # #     Cor_zz = Cor_zz[-which(Cor_zz$ID==(slix+1)),]
-  # #   }
-  # #   else if(slix> 1 & ((Cor_zz[which(Cor_zz$ID==(slix-1)),5]!=reso_m & Cor_zz[which(Cor_zz$ID==slix),5]>reso_m) | (Cor_zz[which(Cor_zz$ID==(slix-1)),5]>reso_m & is.na(Cor_zz[which(Cor_zz$ID==slix),5])))) {
-  # #     Cor_zz = Cor_zz[-which(Cor_zz$ID==slix),]
-  # #   }
-  # #   else if(slix==1 & Cor_zz[which(Cor_zz$ID==slix),5]>reso_m ){
-  # #     Cor_zz = Cor_zz[-which(Cor_zz$ID==slix),]
-  # #   }
-  # # }
-  # # setTxtProgressBar(pgb, max(1,length(drix)))
-  # 
-  # cat("\n Nombre de noeuds: ",length(Cor_zz$V1),"\n")
-  # 
-  # Cor_zz <- Cor_zz %>% 
-  #   group_by(V2,V2=factor(V2, levels = unique(V2))) %>% 
-  #   mutate(nrows = cur_group_id())
-  # 
-  # Cor_zz$nb <- 1
-  # 
-  # Cor_zz <- Cor_zz %>% 
-  #   group_by(V2) %>% 
-  #   mutate(indrow = cumsum(nb))
-  # 
-  # Cor_zz <- Cor_zz %>% 
-  #   group_by(V1) %>% 
-  #   mutate(ncols = cur_group_id())
-  # Cor_zz$ID <- 1:length(Cor_zz$ID)
-  # 
-  # Cor_zz <- data.frame(ID = Cor_zz$ID,
-  #                      X = Cor_zz$V1,
-  #                      Y = as.numeric(as.character(Cor_zz$V2)),
-  #                      Z = round(as.numeric(Cor_zz$V3),digits = 2),
-  #                      indrow = Cor_zz$nrows,
-  #                      indpoint = Cor_zz$indrow,
-  #                      indcol = Cor_zz$ncols,
-  #                      Numer = Cor_zz$Numer)
-  # 
-  # Cor_zz_list <- Cor_zz %>% 
-  #   group_by(indrow) %>% 
-  #   group_split(.keep = T)
-  # 
-  # ielt=0
-  # 
-  # Cor_zz_list1 <- Cor_zz_list[-length(Cor_zz_list)]
-  # Cor_zz_list2 <- Cor_zz_list[-1]
-  # 
-  # Ele_m <- matrix(ncol = 3)
-  # 
-  # cat("Si cela plante dans cette étape, c'est souvent parce qu'il y a un trou dans le maillage (NoData)\n")
-  # cat("Normalement, cela doit être reglé, merci d'envoyer le secteur à problème\n")
-  # cat("Parfois étendre le buffer ou faire des buffers positfs/négatifs si on utilise des limites administratives (îles) est une solution\n")
-  # pgb <- txtProgressBar(min = 0, max = length(Cor_zz_list1),style=3)
-  # for (i in 1:length(Cor_zz_list1)) {
-  #   setTxtProgressBar(pgb, i)
-  #   secteur <- cbind(0,0)
-  #   Lig0Num <- data.frame(indcol=Cor_zz_list1[[i]]$indcol, ID = Cor_zz_list1[[i]]$ID)
-  #   Lig1Num <- data.frame(indcol=Cor_zz_list2[[i]]$indcol, ID = Cor_zz_list2[[i]]$ID)
-  #   LigIndDiff=intersect(Lig0Num$indcol,Lig1Num$indcol)
-  #   EcLig=(LigIndDiff[-1]-LigIndDiff[-length(LigIndDiff)])
-  #   if (max(EcLig)==1)
-  #   {secteur[1,1:2]=cbind(min(LigIndDiff),max(LigIndDiff))}
-  #   else
-  #   {
-  #     nbs=which(EcLig>1)
-  #     for (is in 1:length(nbs))
-  #     {
-  #       if (is==1)
-  #       {deb=1
-  #       secteur[,1:2]=cbind(LigIndDiff[deb],LigIndDiff[nbs[is]])}
-  #       else
-  #       {secteur=rbind(secteur,
-  #                      cbind(LigIndDiff[deb],LigIndDiff[nbs[is]]))
-  #       }
-  #       deb=nbs[is]+1
-  #     }
-  #     secteur=rbind(secteur,
-  #                   cbind(LigIndDiff[deb],LigIndDiff[length(LigIndDiff)]))
-  #   }
-  #   for (is in 1:dim(secteur)[1])
-  #   {
-  #     eltaj=rbind(
-  #       cbind(Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,1])):which(Lig0Num$indcol==(secteur[is,2]-1))],
-  #             Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,1]+1)):which(Lig0Num$indcol==(secteur[is,2]))],
-  #             Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,1]+1)):which(Lig1Num$indcol==(secteur[is,2]))]),
-  #       cbind(Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,1])):which(Lig0Num$indcol==(secteur[is,2]-1))],
-  #             Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,1]+1)):which(Lig1Num$indcol==(secteur[is,2]))],
-  #             Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,1])):which(Lig1Num$indcol==(secteur[is,2]-1))]))
-  #     
-  #     
-  #     if(ielt==0)
-  #     {
-  #       
-  #       Ele_m <- rbind(Ele_m,eltaj)
-  #       
-  #       ielt=1
-  #     }else{
-  #       
-  #       Ele_m <- rbind(Ele_m,eltaj)
-  #     }
-  #     
-  #     ################# GESTION BORDS
-  #     # Début de séquence
-  #     if (secteur[is,1]>1)
-  #     {
-  #       # Haut plus à gauche
-  #       if (length(which(Lig0Num$indcol==(secteur[is,1]-1)))>0){
-  #         if (Lig0Num$indcol[which(Lig0Num$indcol==(secteur[is,1]-1))]>0)
-  #         {eltaj=cbind(Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,1]-1))],
-  #                      Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,1]))],
-  #                      Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,1]))])
-  #         Ele_m <- rbind(Ele_m,eltaj)
-  #         }
-  #       }
-  #       #bas plus à gauche
-  #       if(length(which(Lig1Num$indcol==(secteur[is,1]-1)))>0){
-  #         if (Lig1Num$indcol[which(Lig1Num$indcol==(secteur[is,1]-1))]>0)
-  #         {eltaj=cbind(Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,1]))],
-  #                      Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,1]))],
-  #                      Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,1]-1))])
-  #         Ele_m <- rbind(Ele_m,eltaj)
-  #         }
-  #       }
-  #     }
-  #     # Fin de séquence
-  #     if (secteur[is,2]<header[1])
-  #     {
-  #       # Haut plus à droite
-  #       if(length(which(Lig0Num$indcol==(secteur[is,2]+1)))>0){
-  #         if (Lig0Num$indcol[which(Lig0Num$indcol==(secteur[is,2]+1))]>0)
-  #         {eltaj=cbind(Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,2]))],
-  #                      Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,2]+1))],
-  #                      Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,2]))])
-  #         Ele_m <- rbind(Ele_m,eltaj)
-  #         }
-  #       }
-  #       #bas plus à droite
-  #       if(length(which(Lig1Num$indcol==(secteur[is,2]+1)))>0){
-  #         if (Lig1Num$indcol[which(Lig1Num$indcol==(secteur[is,2]+1))]>0)
-  #         {eltaj=cbind(Lig0Num$ID[which(Lig0Num$indcol==(secteur[is,2]))],
-  #                      Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,2]+1))],
-  #                      Lig1Num$ID[which(Lig1Num$indcol==(secteur[is,2]))])
-  #         Ele_m <- rbind(Ele_m,eltaj)
-  #         }
-  #       }
-  #     }
-  #   }
-  # }
-  # cat("\n")
-  # 
-  # Ele_m <- Ele_m[-1,]
-  # Ele_m <- as.data.frame(Ele_m)
-  # Ele_m$ID <- 1:length(Ele_m$V1)
-  # Ele_m$nb <- 3
   
   # pts <- Cor_zz[,1:4]
   pts <- Cor_zz_for_list[,1:4]
@@ -1043,6 +679,7 @@ Etape2_Maillage_Grille=function()
     NomGRD_P=paste0(dsnlayerC,"\\",nom_maillage,"_",ParamCSV[i,2],".grd")
     if (file.exists(NomCSV_P)==T)
     {
+      # browser()
       Cor_P <- read.table(NomCSV_P,sep=",") 
       Numb_P_csv=dim(Cor_P)[1]
       if (Numb_P_csv==Numb_zz_csv)
@@ -1055,15 +692,21 @@ Etape2_Maillage_Grille=function()
         colnames(Cor_P)=cbind("X","Y","V3")
         Cor_P$Id=1:nrow(Cor_P)
         resultat <- anti_join(Cor_P,Cor_zz_for_list, by = c("X","Y"))
-        if (nrow(resultat)>0)
-        {
+        if (nrow(resultat) > 0) {
           cat("Traitement automatique du problème\n")
-          Cor_P=Cor_P[-resultat$Id,]
-          tab_P= cbind(Cor_zz[,1],Cor_P[Cor_zz[,1],1:3])
-        }else{
-          cat(ParamCSV[i,1],"mis à ",ParamCSV[i,3],"par défaut si vous continuer le process\n");browser()
-          tab_P= cbind(pts[,1:3],15)
+          # On supprime les points qui ne sont pas dans le maillage
+          Cor_P = Cor_P[-resultat$Id, ]
+          
+          tab_Pz = inner_join(x = Cor_zz_for_list, y = Cor_P, by = c("X", "Y"))
+          
+        } else {
+          cat(ParamCSV[i, 1], "mis à ", ParamCSV[i, 3], "par défaut si vous continuez le process\n")
+          # browser()
+          
+          tab_Pz = Cor_zz_for_list
+          tab_Pz$V3 = as.numeric(ParamCSV[i, 3])
         }
+        
       }
       Export_GRD(NomGRD_P,
                  paste(length(Elems$ID)," ",length(pts$ID)),
@@ -1167,6 +810,8 @@ Etape2_Fr_CN_SLF=function()
   if (file.exists(paste0(dsnlayerC,"\\",nom_Telemac,".cli"))==T){unlink(paste0(dsnlayerC,"\\",nom_Telemac,".cli"))}
   
   setwd(chemin_pputils)
+  # On indique explicitement à Python où se trouve le dossier racine de pputils
+  Sys.setenv(PPUTILS = chemin_pputils)
   cmd=paste0(Bug_python," append_adcirc_cerema.py -b ", paste0(dsnlayerC,"\\",nom_maillage,"_",nom_MNT,".grd"),
              " -f ",
              paste0(dsnlayerC,"\\",nom_maillage,"_friction.grd"),

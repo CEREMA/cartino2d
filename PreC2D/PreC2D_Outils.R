@@ -1,4 +1,4 @@
-BufPlusMoins=function(nominput,seuilSup,BufPlus,BufMoins,typbord,dsnlayer,ResModif,Qgis,SecteurGRASS)
+BufPlusMoins=function(nominput,seuilSup,BufPlus,BufMoins,typbord,dsnlayer,ResModif,Qgis,SecteurGRASS,qgis_process=NULL)
 {
   nomtmp_Buf1="BufPlus"
   cmd=paste0("r.buffer --quiet --overwrite input=",nominput," output=",nomtmp_Buf1," distance=",BufPlus)
@@ -90,14 +90,17 @@ BufPlusMoins=function(nominput,seuilSup,BufPlus,BufMoins,typbord,dsnlayer,ResMod
 RexPluie_CasPluie=function()
 {
   library(readxl)
-  chem_routine=R.home(component = "Cerema")
   # paste0(chem_routine,"/PreC2D")
-  Link_Data = "Data_PluieRaster.xlsx"
-  if (file.exists(file.path(chem_routine,"PreC2D",Link_Data))==F){cat("le fichier",Link_Data,"n'existe pas\n");BOOM=Data_PluieRasterxlsxamettredans}
-  Link_DataXLS = read_excel(file.path(chem_routine,"PreC2D",Link_Data))
-  Link_DataXLS=Link_DataXLS[order(Link_DataXLS$NomCas),]
-  nchoix = select.list(Link_DataXLS$NomCas,title = "Choix", multiple = T, graphics = T)
-  Search = which(Link_DataXLS$NomCas %in% nchoix)
+  if (exists("Link_DataRADAR") == FALSE) { Link_DataRADAR = "Data_PluieRaster.xlsx" }
+  if (file.exists(file.path(chem_routine, "PreC2D", Link_DataRADAR)) == FALSE) { cat("le fichier", file.path(chem_routine, "PreC2D", Link_DataRADAR), "n'existe pas\n"); BOOM = Data_PluieRasterxlsxamettredans }
+  Link_DataXLS = read_excel(file.path(chem_routine, "PreC2D", Link_DataRADAR))
+  Link_DataXLS = Link_DataXLS[order(Link_DataXLS$NomCas), ]
+  if (nrow(Link_DataXLS) > 1) {
+    nchoix = select.list(Link_DataXLS$NomCas, title = "Choix", multiple = TRUE, graphics = TRUE)
+    Search = which(Link_DataXLS$NomCas %in% nchoix)
+  } else {
+    Search = 1
+  }
   ListeCas = as.data.frame(Link_DataXLS[Search,])
   iShyreg=which(Link_DataXLS$TypPluie=="Stat" & Link_DataXLS$EPSG==ListeCas$EPSG)
   if(length(iShyreg)>0){
@@ -479,9 +482,9 @@ pluie_stats <- function(ras_crop,nbpastemps,DateDebut,DateFin){
 DataObs_choix=function()
 {
   library(readxl)
-  chem_routine=R.home(component = "Cerema")
+  chem_routine=dirname(rstudioapi::getActiveDocumentContext()$path)
   paste0(chem_routine,"/PreC2D")
-  Link_Data = "Data_obs.xlsx"
+  Link_Data = "Data_obs_formation.xlsx"
   Link_DataXLS = read_excel(file.path(chem_routine,"PreC2D",Link_Data))
   Link_DataXLS=Link_DataXLS[order(Link_DataXLS$Evenements),]
   nchoix = select.list(Link_DataXLS$Evenements,title = "Choix", multiple = T, graphics = T)
@@ -493,3 +496,94 @@ DataObs_choix=function()
   return(ListeObs)
 }
 
+BufPlusMoins_Raster=function(nominput,seuilSup,BufPlus,BufMoins,typbord,dsnlayer,ResModif,Qgis,SecteurGRASS,Aint=0,Aext=0)
+{
+  nomtmp_Buf1="BufPlus"
+  cmd=paste0("r.buffer --quiet --overwrite input=",nominput," output=",nomtmp_Buf1," distance=",BufPlus)
+  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  
+  cmd=paste0("r.mask -i --quiet --overwrite raster=",nomtmp_Buf1)
+  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  
+  nomtmp_Buf2="BufPlusInv"
+  cmd=paste0("r.resample --quiet --overwrite input=","MASK"," output=",nomtmp_Buf2)
+  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  
+  cmd=paste0("r.mask -r")
+  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  
+  nomtmp_Buf3="BufPlusInvBufMoins"
+  cmd=paste0("r.buffer --quiet --overwrite input=",nomtmp_Buf2," output=",nomtmp_Buf3," distance=",BufMoins)
+  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  
+  cmd=paste0("r.mask -i --quiet --overwrite raster=",nomtmp_Buf3)
+  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  
+  nomtmp_Buf4=paste0(nominput,"BufPlusInvBufMoinsInv")
+  cmd=paste0("r.resample --quiet --overwrite input=","MASK"," output=",nomtmp_Buf4)
+  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  
+  cmd=paste0("r.mask -r")
+  print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  
+  # ------------- RASTER HOLE FILLING & ISLAND REMOVAL --------------
+  if (Aint > 0) {
+    Aint_ha = Aint / 10000.0
+    nom_sec = paste0(nominput, "_sec")
+    exp_sec = paste0(nom_sec," = if(isnull(",nomtmp_Buf4,"), 1, null())")
+    cmd=paste0("r.mapcalc --overwrite ",shQuote(exp_sec))
+    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    
+    nom_sec_large = paste0(nominput, "_sec_large")
+    cmd = paste0("r.reclass.area -d --overwrite input=",nom_sec," output=",nom_sec_large," value=",Aint_ha," mode=lesser method=rmarea")
+    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    
+    nomtmp_Buf4_filled = paste0(nominput, "_filled")
+    exp_final = paste0(nomtmp_Buf4_filled," = if(isnull(",nom_sec_large,"), 1, null())")
+    cmd=paste0("r.mapcalc --overwrite ",shQuote(exp_final))
+    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    
+    nomtmp_Buf4 = nomtmp_Buf4_filled
+  }
+  
+  if (Aext > 0) {
+    Aext_ha = Aext / 10000.0
+    nomtmp_Buf4_clean = paste0(nominput, "_clean")
+    cmd = paste0("r.reclass.area -d --overwrite input=",nomtmp_Buf4," output=",nomtmp_Buf4_clean," value=",Aext_ha," mode=lesser method=rmarea")
+    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    
+    nomtmp_Buf4 = nomtmp_Buf4_clean
+  }
+  # -----------------------------------------------------------------
+
+  if (ResModif>0)
+  {
+    cmd=paste0("g.region --overwrite --quiet -a raster=",nomtmp_Buf4," res=",as.character(ResModif))
+    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  }
+  
+  nomvectsortie=file.path(dsnlayer,paste0(raci,"_",nominput,".gpkg"))
+  
+  if (Qgis==1)
+  {
+    unlink(nomvectsortie)
+    DossBuf=paste0("BufPlus",BufPlus,"_Moins",BufMoins)
+    if (file.exists(file.path(dsnlayer,DossBuf))==F){dir.create(file.path(dsnlayer,DossBuf))}
+    nomsortie=file.path(dsnlayer,DossBuf,paste0(raci,"_",nominput,"_Rast.tif"))
+    cmd=paste0("r.out.gdal --quiet --overwrite -c -f input=",nomtmp_Buf4," output=",nomsortie," format=GTiff")
+    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd)) 
+    
+    cmd <- paste0(qgis_process, " run gdal:polygonize",
+                  " --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019",
+                  " --INPUT=", shQuote(nomsortie),
+                  " --BAND=1 --FIELD=DN --EIGHT_CONNECTEDNESS=false --EXTRA=",
+                  " --OUTPUT=", shQuote(nomvectsortie))
+    print(cmd); system(cmd)
+  }else{
+    cmd=paste0("r.to.vect ",typbord," --quiet --overwrite input=",nomtmp_Buf4," output=",nomtmp_Buf4," type=area")
+    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+    
+    cmd=paste0("v.out.ogr --quiet --overwrite -c -s input=",nomtmp_Buf4," output=",nomvectsortie," format=GPKG type=area")
+    print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
+  }
+}

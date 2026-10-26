@@ -53,11 +53,11 @@ if (dejafait==0)
   source(file.path(chem_routine,"PreC2D","PreC2D_6_2_Decrenelage_job.R"))
   AireMin_Inter=630
   AireMin_Exter=25*25*2.01
-  nomContour=Decrenelage(nomvectsortie,AireMin_Inter,AireMin_Exter,EPSG,resolution)
+  nomContour=Decrenelage(nomvectsortie,AireMin_Inter,AireMin_Exter,EPSG,resolution,qgis_process)
   
   
   # Garder le + grand
-  # qgis_process run native:keepnbiggestparts --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019 --POLYGONS='C:/Cartino2D/France/EAIMQ/C0088_642819km_X319171Y6737743/Post/hyeto_C0088_642819km_X319171Y6737743_PQN_00h_00m_240h_00m_SOURCEFILE__ZI_Qgis_Final_Aint630_Aext1256.25.gpkg|layername=hyeto_C0088_642819km_X319171Y6737743_PQN_00h_00m_240h_00m_SOURCEFILE__ZI_Qgis_Final_Aint630_Aext1256.25' --PARTS=1 --OUTPUT=TEMPORARY_OUTPUT
+  # qgis_process run native:keepnbiggestparts --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019 --POLYGONS='C:/Cartino2D/France/CarteSocleQ/C0088_642819km_X319171Y6737743/Post/hyeto_C0088_642819km_X319171Y6737743_PQN_00h_00m_240h_00m_SOURCEFILE__ZI_Qgis_Final_Aint630_Aext1256.25.gpkg|layername=hyeto_C0088_642819km_X319171Y6737743_PQN_00h_00m_240h_00m_SOURCEFILE__ZI_Qgis_Final_Aint630_Aext1256.25' --PARTS=1 --OUTPUT=TEMPORARY_OUTPUT
   # Garder la plus grande partie
   nomContourGrand=file.path(dsnDPE,"ContourRes_GrandePartie.gpkg")
   ContourPropre=st_cast(st_read(nomContour),"POLYGON")
@@ -88,7 +88,7 @@ if (dejafait==0)
 
 
 # Frontière Ligne svers polygones
-# qgis_process run qgis:linestopolygons --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019 --INPUT='C:/Cartino2D/France/EAIMQ/C0088_642819km_X319171Y6737743/Frontiere.shp' --OUTPUT=TEMPORARY_OUTPUT
+# qgis_process run qgis:linestopolygons --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019 --INPUT='C:/Cartino2D/France/CarteSocleQ/C0088_642819km_X319171Y6737743/Frontiere.shp' --OUTPUT=TEMPORARY_OUTPUT
 nomFrontiere=file.path(dsnDPE,"Frontiere_Surf.gpkg")
 cmd=paste0(qgis_process, " run qgis:linestopolygons",
            " --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019",

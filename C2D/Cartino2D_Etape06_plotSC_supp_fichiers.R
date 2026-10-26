@@ -27,7 +27,7 @@ Etape6_fn <- function(){
   }}, error = function(e) {skip_to_next <<- TRUE})
   return(skip_to_next)
   
-
+  
   
 }
 
