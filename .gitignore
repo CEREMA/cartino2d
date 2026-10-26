@@ -8,8 +8,9 @@
 # 1. PARAMÈTRES UTILISATEUR & SECTEURS PERSONNELS (C2D_ParamUser)
 # ------------------------------------------------------------------------------
 # Ignorer automatiquement tout nouveau secteur ou fichier de paramétrage créé lors des études
-# Fichier de configuration clusters distants (confidentiel - jamais suivi)
+# Fichiers de configuration machine locale et clusters distants (propres au poste - jamais suivis)
 C2D_ParamUser/C2D_CodeCalcuDistant.R
+C2D_ParamUser/C2D_LienOutilsPC.R
 
 C2D_ParamUser/C2D_00_Secteur_*.R
 C2D_ParamUser/C2D_ParamUtilisateur_*.R
@@ -22,7 +23,6 @@ C2D_ParamUser/C2D_ParamUtilisateur_*.R
 !C2D_ParamUser/C2D_CodeCalcuDistant_TEMPLATE.R
 !C2D_ParamUser/C2D_LienOutilsPC_xxxxxx.R
 !C2D_ParamUser/C2D_LienOutilsPC_TEMPLATE.R
-!C2D_ParamUser/C2D_LienOutilsPC.R
 !C2D_ParamUser/C2D_00_Secteur_Gardons.R
 !C2D_ParamUser/C2D_ParamUtilisateur_Gardons.R
 !C2D_ParamUser/C2D_00_Secteur_Grabels.R
