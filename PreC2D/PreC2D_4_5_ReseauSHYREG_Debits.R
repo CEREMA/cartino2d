@@ -53,8 +53,8 @@ for (i_sect_deb in 1:dim(ZoneCEB_Buf)[1]){
   id_deb <- ZoneCEB_Buf$NOM[i_sect_deb]
   
   id_splitted <- strsplit(id_deb, split="_|km")[[1]]
-  id_deb_cum = id_deb_cum + as.integer(id_splitted[1])
-  id_deb_cum_dec = id_deb_cum_dec + as.integer(id_splitted[2])
+  id_deb_cum = id_deb_cum + as.integer(as.numeric(gsub("\\D", "", id_splitted[1])))
+  id_deb_cum_dec = id_deb_cum_dec + as.integer(as.numeric(id_splitted[2]))
   
   ################################################################################################################
   # Calcul du réseau vecteur très classique

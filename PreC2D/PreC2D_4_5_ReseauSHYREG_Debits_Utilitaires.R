@@ -10,7 +10,7 @@ Creat_VRT=function(dsnLidar,LidarC,dsnlayerTravail)
   file.create(nom_ascvrt)
   write(listeASC, file=nom_ascvrt, append=T)
   vrtfile = paste0(dsnlayerTravail,"/",nom_base,".vrt") ##chemin du vrt à créer
-  cmd = paste(shQuote(OSGeo4W_path), "gdalbuildvrt",vrtfile,"-input_file_list",nom_ascvrt) ## commande pour exécuter gdalbuildvrt
+  cmd = paste(OSGeo4W_path, "gdalbuildvrt",vrtfile,"-input_file_list",nom_ascvrt) ## commande pour exécuter gdalbuildvrt
   system(cmd) 
   return(vrtfile)
   # cmd = paste(shQuote(OSGeo4W_path), "gdalbuildvrt",vrtfile,"-input_file_list",nom_ascvrt) 
@@ -69,7 +69,7 @@ ReseauRasterVecteur=function(nomZone,nomZoneCEBBuf,dsnlayerTravail,dsnlayerQ,nom
   cmd=paste0("r.mask -i --quiet --overwrite raster=", nomReseauQ_1)
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
-  cmd=paste0("r.resample input=MASK output=masque")
+  cmd=paste0("r.resample input=MASK --overwrite output=masque")
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
   
   cmd=paste0("r.mask -r")

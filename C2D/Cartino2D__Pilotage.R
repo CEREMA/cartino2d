@@ -84,7 +84,7 @@ if (ETAPE[9]==1 | ETAPE[10]==1)
 # print(contours$NOM)
 cat("Traitement de: ",contours[nsecteur, ]$NOM,"\n")
 
-cat("Pause: ",tpsPause)
+cat("Pause: ",tpsPause,"\n")
 Sys.sleep(tpsPause)
 
 # contours <- contours[nsecteur,]
@@ -92,18 +92,37 @@ Sys.sleep(tpsPause)
 for (isrc in 1:length(fichiers_source)){
   source(fichiers_source[isrc])
 }
-if(nb_proc_pre>1){
-  cl <- parallel::makeCluster(nb_proc_pre) 
+if(nb_proc_pre>1 & (ETAPE[1]==1|ETAPE[2]==1|ETAPE[3]==1|ETAPE[4]==1)){
+  nb_proc_pre_=min(floor(0.6*detectCores()),nb_proc_pre,length(nsecteur))
+  cat("## ------ ",length(nsecteur)," secteurs à traiter -------------##\n")
+  cat("--- PRE  --- ",nb_proc_pre_  ," CALCULS MODE PARALLELE sur ",nb_proc_pre," proposés utilisateur-------------\n")
+  cl <- parallel::makeCluster(nb_proc_pre_,outfile = file.path(dsnlayer, "log_workers.txt")) 
+  
   doParallel::registerDoParallel(cl)
   foreach::foreach(ic = 1:length(nsecteur), 
                    .combine = 'c',
                    .inorder = FALSE,
                    .packages = c("sf","dplyr","utils","sfheaders","tidyverse","readxl")) %dopar%{
-                     
+                     # Au tout début du foreach (ligne 106) :
+                     # cat(paste0("Worker PID ", Sys.getpid(), " démarre le secteur : ", contour$NOM, " (STEP_PRE = ", contour$STEP_PRE, ")\n"),
+                     #     file = file.path(SecteurGRASS_, "suivi_demarrage.txt"), append = TRUE)
                      skip_to_next <- FALSE
-                     #############################################################################
-                     ################ CONTOUR #####################################################
-                     #############################################################################
+                     
+                     # =========================================================================
+                     # 1. ISOLATION TOTALE DE L'ENVIRONNEMENT WINDOWS & GRASS PAR WORKER
+                     # =========================================================================
+                     worker_id = paste0("worker_", Sys.getpid())
+                     worker_env = file.path(SecteurGRASS_, "TEMP_WORKERS", worker_id)
+                     dir.create(worker_env, recursive = TRUE, showWarnings = FALSE)
+                     
+                     # Redirection des dossiers de session propres à ce coeur
+                     Sys.setenv(APPDATA     = worker_env)
+                     Sys.setenv(USERPROFILE = worker_env)
+                     Sys.setenv(TEMP        = worker_env)
+                     Sys.setenv(TMP         = worker_env)
+                     Sys.setenv(GISRC       = file.path(worker_env, ".grassrc"))
+                     # =========================================================================
+                     
                      # Récupération du contour i
                      contour = contours[nsecteur[ic], ]
                      if(contour$STEP_PRE!=0) next
@@ -115,8 +134,20 @@ if(nb_proc_pre>1){
                      # contour$NOM=0 dans pputils, il ne veut qu'une colonne
                      contourPPutils = contour[,1]
                      contourPPutils$NOM = 0
-                     SecteurGRASS=paste0(dirname(SecteurGRASS_),"_",format(Sys.time(),format="%Y%m%d_%H%M%S"),'/',contour$NOMPOST,"_",nomcontour,"/",basename(SecteurGRASS_))
+                     # SecteurGRASS=paste0(dirname(SecteurGRASS_),"_",format(Sys.time(),format="%Y%m%d_%H%M%S"),'/',contour$NOMPOST,"_",nomcontour,"/",basename(SecteurGRASS_))
                      
+                     # Dossier racine dédié au worker (aucun risque de collision entre les 40 coeurs)
+                     # grass_base = file.path(dirname(dirname(SecteurGRASS_)), paste0("worker_", Sys.getpid()))
+                     # secteur_nom = paste0(contour$NOMPOST, "_", nomcontour)
+                     # 
+                     # # Chemin complet vers le Mapset : GISDBASE / LOCATION / MAPSET
+                     # SecteurGRASS = file.path(grass_base, secteur_nom, "PERMANENT")
+                     # Nom unique pour la LOCATION GRASS (Secteur + Horodatage)
+                     loc_name = paste0(contour$NOMPOST, "_", nomcontour, "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+                     
+                     # 3 niveaux stricts : GISDBASE / LOCATION / MAPSET
+                     # Exemple : C:/GRASSDATA / Secteur1_20260921_191500 / PERMANENT
+                     SecteurGRASS = file.path(SecteurGRASS_, loc_name, "PERMANENT")
                      # ETAPE 1******ETAPE 1******ETAPE 1 ---------------------------------------
                      Etape1_fn_parallel()
                      
@@ -136,7 +167,8 @@ if(nb_proc_pre>1){
                      # #############################################################################
                      Etape4_fn_parallel()
                      
-                     
+                     # Nettoyage du dossier temporaire de ce worker
+                     unlink(worker_env, recursive = TRUE)
                    }
   
   parallel::stopCluster(cl)
@@ -145,30 +177,30 @@ if(nb_proc_pre>1){
 }
 
 
-# ETAPE 11******ETAPE 11******ETAPE 11 ---------------------------------------    
-
-if (ETAPE[11] == 1)
-{
-  Avanc = file.path(dsnlayer, "Suivicalcul.txt")
-  file.create(Avanc)
-  ASC_Final = paste0(extsortieASC[1], ".asc")
-  for (isort in 2:length(extsortieASC))
-  {
-    ASC_Final = paste(ASC_Final, paste0(extsortieASC[isort], ".asc"), sep =
-                        ";")
-  }
-  write(
-    paste(
-      "CAS",
-      "RES",
-      paste0(extsortieASC[4], "_Brut.asc"),
-      ASC_Final,
-      sep = ";"
-    ),
-    file = Avanc,
-    append = T
-  )
-}
+# # ETAPE 11******ETAPE 11******ETAPE 11 ---------------------------------------    
+# 
+# if (ETAPE[11] == 1)
+# {
+#   Avanc = file.path(dsnlayer, "Suivicalcul.txt")
+#   file.create(Avanc)
+#   ASC_Final = paste0(extsortieASC[1], ".asc")
+#   for (isort in 2:length(extsortieASC))
+#   {
+#     ASC_Final = paste(ASC_Final, paste0(extsortieASC[isort], ".asc"), sep =
+#                         ";")
+#   }
+#   write(
+#     paste(
+#       "CAS",
+#       "RES",
+#       paste0(extsortieASC[4], "_Brut.asc"),
+#       ASC_Final,
+#       sep = ";"
+#     ),
+#     file = Avanc,
+#     append = T
+#   )
+# }
 
 
 if (exists("SensCalcul")==T)
@@ -195,6 +227,7 @@ for (ic in 1:length(nsecteur)){
   contourPPutils$NOM = 0
   
   if(nb_proc_pre==1){
+    skip_to_next <- FALSE
     SecteurGRASS=paste0(dirname(SecteurGRASS_),"_",format(Sys.time(),format="%Y%m%d_%H%M%S"),'/',contour$NOMPOST,"_",nomcontour,"/",basename(SecteurGRASS_))
     # ETAPE 1******ETAPE 1******ETAPE 1 ---------------------------------------
     skip_to_next <- Etape1_fn(skip_to_next)
@@ -735,77 +768,87 @@ if(length(which(ETPCALCUL==1))==0){
       
     }
   }else{
-    cl <- parallel::makeCluster(nb_proc_post) 
-    doParallel::registerDoParallel(cl)
-    foreach::foreach(ic = 1:length(nsecteur), 
-                     .combine = 'c',
-                     .multicombine=TRUE,
-                     .inorder = FALSE,
-                     .packages = c("sf","dplyr","utils","sfheaders","tidyverse","ggplot2","readxl","plotly")) %dopar%{
-                       skip_to_next <- FALSE
-                       #############################################################################
-                       ################ CONTOUR #####################################################
-                       #############################################################################
-                       # Récupération du contour i
-                       contour = contours[nsecteur[ic], ]
-                       # if(contour$STEP_PRE!=0) next
-                       
-                       # Récupération du nom du contour
-                       nomcontour = contour$NOM
-                       dsnlayerC = file.path(dsnlayer,contour$NOMPOST, nomcontour)
-                       
-                       # contour$NOM=0 dans pputils, il ne veut qu'une colonne
-                       contourPPutils = contour[,1]
-                       contourPPutils$NOM = 0
-                       SecteurGRASS=paste0(dirname(SecteurGRASS_),"_",format(Sys.time(),format="%Y%m%d_%H%M%S"),'/',contour$NOMPOST,"_",nomcontour,"/",basename(SecteurGRASS_))
-                       
-                       # ETAPE 6******ETAPE 6******ETAPE 6 --------------------------------------- 
-                       Etape6_fn_parallel()
-                       # ETAPE 7******ETAPE 7******ETAPE 7 ---------------------------------------
-                       Etape7_fn_parallel()
-                       
-                       # ETAPE 9******ETAPE 9******ETAPE 9 ---------------------------------------  
-                       Etape9_fn_parallel()
-                       # ETAPE 10******ETAPE 10******ETAPE 10 ---------------------------------------  
-                       Etape10_fn_parallel()
-                       unlink(dirname(SecteurGRASS),recursive=TRUE)
-                       
-                       
-                     }
-    
-    parallel::stopCluster(cl)
-    
-    cl <- parallel::makeCluster(nb_proc_post) 
-    doParallel::registerDoParallel(cl)
-    debit_sc <- foreach::foreach(icp = 1:length(nsecteur), 
-                                 .combine = 'list',
-                                 .multicombine = TRUE,
-                                 .inorder = FALSE,
-                                 .packages = c("sf","dplyr","utils","sfheaders","tidyverse","ggplot2","readxl")) %dopar%{
-                                   # ETAPE 8******ETAPE 8******ETAPE 8 --------------------------------------- 
-                                   skip_to_next <- FALSE
-                                   #############################################################################
-                                   ################ CONTOUR #####################################################
-                                   #############################################################################
-                                   # Récupération du contour i
-                                   contour = contours[nsecteur[icp], ]
-                                   # if(contour$STEP_PRE!=0) next
-                                   
-                                   # Récupération du nom du contour
-                                   nomcontour = contour$NOM
-                                   dsnlayerC = file.path(dsnlayer,contour$NOMPOST, nomcontour)
-                                   
-                                   # contour$NOM=0 dans pputils, il n
-                                   debits_df=Etape8_fn_parallel()
-                                   return(debits_df)
-                                   
-                                 }
-    
-    parallel::stopCluster(cl)
-    
-    
-    
-  }
+    if (ETAPE[6]==1|ETAPE[7]==1|ETAPE[9]==1|ETAPE[10]==1)
+    {
+      nb_proc_post_=min(floor(0.6*detectCores()),nb_proc_post,length(nsecteur))
+      cat("## ------ ",length(nsecteur)," secteurs à traiter -------------##\n")
+      cat("--- POST --- ",nb_proc_post_  ," CALCULS MODE PARALLELE sur ",nb_proc_post," proposés utilisateur-------------\n")
+      cl <- parallel::makeCluster(nb_proc_post_) 
+      
+      doParallel::registerDoParallel(cl)
+      foreach::foreach(ic = 1:length(nsecteur), 
+                       .combine = 'c',
+                       .multicombine=TRUE,
+                       .inorder = FALSE,
+                       .packages = c("sf","dplyr","utils","sfheaders","tidyverse","ggplot2","readxl","plotly")) %dopar%{
+                         skip_to_next <- FALSE
+                         #############################################################################
+                         ################ CONTOUR #####################################################
+                         #############################################################################
+                         # Récupération du contour i
+                         contour = contours[nsecteur[ic], ]
+                         # if(contour$STEP_PRE!=0) next
+                         
+                         # Récupération du nom du contour
+                         nomcontour = contour$NOM
+                         dsnlayerC = file.path(dsnlayer,contour$NOMPOST, nomcontour)
+                         
+                         # contour$NOM=0 dans pputils, il ne veut qu'une colonne
+                         contourPPutils = contour[,1]
+                         contourPPutils$NOM = 0
+                         SecteurGRASS=paste0(dirname(SecteurGRASS_),"_",format(Sys.time(),format="%Y%m%d_%H%M%S"),'/',contour$NOMPOST,"_",nomcontour,"/",basename(SecteurGRASS_))
+                         
+                         # ETAPE 6******ETAPE 6******ETAPE 6 --------------------------------------- 
+                         Etape6_fn_parallel()
+                         # ETAPE 7******ETAPE 7******ETAPE 7 ---------------------------------------
+                         Etape7_fn_parallel()
+                         
+                         # ETAPE 9******ETAPE 9******ETAPE 9 ---------------------------------------  
+                         Etape9_fn_parallel()
+                         # ETAPE 10******ETAPE 10******ETAPE 10 ---------------------------------------  
+                         Etape10_fn_parallel()
+                         unlink(dirname(SecteurGRASS),recursive=TRUE)
+                         
+                         
+                       }
+      
+      parallel::stopCluster(cl)
+      
+      nb_proc_post_=min(floor(0.6*detectCores()),nb_proc_post,length(nsecteur))
+      cat("## ------ ",length(nsecteur)," secteurs à traiter -------------##\n")
+      cat("--- POST --- ",nb_proc_post_  ," CALCULS MODE PARALLELE sur ",nb_proc_post," proposés utilisateur-------------\n")
+      cl <- parallel::makeCluster(nb_proc_post_) 
+      
+      doParallel::registerDoParallel(cl)
+      debit_sc <- foreach::foreach(icp = 1:length(nsecteur), 
+                                   .combine = 'list',
+                                   .multicombine = TRUE,
+                                   .inorder = FALSE,
+                                   .packages = c("sf","dplyr","utils","sfheaders","tidyverse","ggplot2","readxl")) %dopar%{
+                                     # ETAPE 8******ETAPE 8******ETAPE 8 --------------------------------------- 
+                                     skip_to_next <- FALSE
+                                     #############################################################################
+                                     ################ CONTOUR #####################################################
+                                     #############################################################################
+                                     # Récupération du contour i
+                                     contour = contours[nsecteur[icp], ]
+                                     # if(contour$STEP_PRE!=0) next
+                                     
+                                     # Récupération du nom du contour
+                                     nomcontour = contour$NOM
+                                     dsnlayerC = file.path(dsnlayer,contour$NOMPOST, nomcontour)
+                                     
+                                     # contour$NOM=0 dans pputils, il n
+                                     debits_df=Etape8_fn_parallel()
+                                     return(debits_df)
+                                     
+                                   }
+      
+      parallel::stopCluster(cl)
+      
+      
+      
+    }}
 }
 #-----------------------------------------------------
 

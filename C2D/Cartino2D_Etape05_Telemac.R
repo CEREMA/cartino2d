@@ -64,8 +64,8 @@ ecriture_fichier_sh <- function(casfiles, dto_, dirs){
   nbcores <- floor(nbnodes/DecoupCoeurs)
   ncnode_tgcc <- max(1,floor(nbcores/NCoeurs))
   nbcores <- NCoeurs*ncnode_tgcc
-  nbcores=512
-  ncnode_tgcc=4
+  nbcores=64
+  ncnode_tgcc=1
   cat("FP ",nbcores,"\n")
   
   fun_write1 <- function(X){
@@ -78,6 +78,7 @@ ecriture_fichier_sh <- function(casfiles, dto_, dirs){
     write(paste0("#MSUB -n ",as.character(nbcores)),file=dto[[X]], append=T)
     write(paste0("#MSUB -N ",ncnode_tgcc),file=dto[[X]], append=T)
     write(paste0("#MSUB -A ",project_tgcc),file=dto[[X]], append=T)
+    write(paste0("#MSUB -m ","work"),file=dto[[X]], append=T)
     write('export ROOT="/ccc/work/cont003/gen14287/gen14287/telemac-mascaret-muffins"',file=dto[[X]], append=T)
     write("source ${ROOT}/configs/tgcc-gnu-ompi.sh",file=dto[[X]], append=T)
     write(paste0("cd /ccc/scratch/cont003/gen14287/",dir_cluster_tgcc,'/',contour$NOMPOST,'/',nomcontour),file=dto[[X]], append=T)
@@ -355,6 +356,9 @@ preparation_cluster <- function(){
     source_files <- list.files(dir_from,pattern = ".txt",full.names = TRUE)
     fichiers_trouves <- grep("OuvHydrau_Select", source_files, value = TRUE)
     file.copy(from = fichiers_trouves,to = dir_copy_case,overwrite = TRUE,recursive = TRUE)
+    if(file.exists(file.path(dir_from,"abaques2.txt"))){
+      file.copy(from=file.path(dir_from,"abaques2.txt"),to = dir_copy_case,overwrite = TRUE,recursive = TRUE)
+    }
   }
   if(file.exists(file.path(dir_from,"SectControl_Select.txt"))){
     source_files <- list.files(dir_from,pattern = "SectControl_Select.txt",full.names = TRUE)
@@ -738,16 +742,16 @@ download_results_margny <- function(){
       res_file <- file.path(dir_from_down,substring(res_telemac,3))
       cmd = paste0(pscp_path," -unsafe -scp -i ",clef_margny_ppk,
                    " ",hoteDTecREM,":",res_file," ",dir_to_down)
-      system(cmd)
+      system(cmd, show.output.on.console = TRUE)
       # browser()
       sc_file <- file.path(dir_from_down,substring(sc_telemac,3))
       cmd = paste0(pscp_path," -unsafe -scp -i ",clef_margny_ppk,
                    " ",hoteDTecREM,":",sc_file," ",dir_to_down)
-      system(cmd)
+      system(cmd, show.output.on.console = TRUE)
       sortie_file <- file.path(dir_from_down,foldersortie,substring(sortie_telemac,3))
       cmd = paste0(pscp_path," -unsafe -scp -i ",clef_margny_ppk,
                    " ",hoteDTecREM,":",sortie_file," ",dir_to_down)
-      system(cmd)
+      system(cmd, show.output.on.console = TRUE)
     }
     
   }else{
@@ -844,15 +848,15 @@ download_results <- function(){
     res_file <- file.path(dir_from_down,substring(res_telemac,3))
     cmd = paste0(pscp_path," -unsafe -scp -pw ",MdPDTecREM,
                  " ",hoteDTecREM,":",res_file," ",dir_to_down)
-    system(cmd)
+    system(cmd, show.output.on.console = TRUE)
     sc_file <- file.path(dir_from_down,substring(sc_telemac,3))
     cmd = paste0(pscp_path," -unsafe -scp -pw ",MdPDTecREM,
                  " ",hoteDTecREM,":",sc_file," ",dir_to_down)
-    system(cmd)
+    system(cmd, show.output.on.console = TRUE)
     sortie_file <- file.path(dir_from_down,foldersortie,substring(sortie_telemac,3))
     cmd = paste0(pscp_path," -unsafe -scp -pw ",MdPDTecREM,
                  " ",hoteDTecREM,":",sortie_file," ",dir_to_down)
-    system(cmd)
+    system(cmd, show.output.on.console = TRUE)
   }
 }
 ################### Vérification du fichier sortie  
@@ -1137,7 +1141,7 @@ launch_cluster_ifremer <- function(){
   zipnamecluster <- paste0("/scratch/",contour$NOMPOST,"/",nomcontour,".zip")
   
   cmd <- paste0("curl -# -T ",zipfullname,' -u ',hoteextrifremer,":",Mdpextrifremer," ftp://eftp.ifremer.fr",zipnamecluster)
-  print(paste0("Téléversement de : ",zipname));system(cmd)
+  print(paste0("Téléversement de : ",zipname));system(cmd, show.output.on.console = TRUE)
   # curl -T zipfullname -u ftp://ftp.example.com/dir/path/
   
   
@@ -1442,24 +1446,24 @@ download_results_ifremer <- function(){
         # write("quit",file=ftpdown_txt_file, append=T)
         # close(id_txt_file)
         # cmd <- paste0("ftp -n -s:",ftpdown_txt_file)
-        # print(cmd);system(cmd)
+        # print(cmd);system(cmd, show.output.on.console = TRUE)
         if(sc_telemac!=" int 0"){
           cmd <- paste0("curl -# -u ",hoteextrifremer,":",Mdpextrifremer," ftp://eftp.ifremer.fr",sc_telemac_ftp_path," --output ",dir_to_down,"\\",substring(sc_telemac,3))
-          print(paste0("Téléchargement de : ",substring(sc_telemac,3)));system(cmd)
+          print(paste0("Téléchargement de : ",substring(sc_telemac,3)));system(cmd, show.output.on.console = TRUE)
           
           
           
           
         }
         cmd <- paste0("curl -# -u ",hoteextrifremer,":",Mdpextrifremer," ftp://eftp.ifremer.fr",sortie_telemac_ftp_path," --output ",dir_to_down,"\\",substring(sortie_telemac,3))
-        print(paste0("Téléchargement de : ",substring(sortie_telemac,3)));system(cmd)
+        print(paste0("Téléchargement de : ",substring(sortie_telemac,3)));system(cmd, show.output.on.console = TRUE)
         cmd <- paste0("curl -# -u ",hoteextrifremer,":",Mdpextrifremer," ftp://eftp.ifremer.fr",res_telemac_ftp_path," --output ",dir_to_down,"\\",substring(res_telemac,3))
-        print(paste0("Téléchargement de : ",substring(res_telemac,3)));system(cmd)
+        print(paste0("Téléchargement de : ",substring(res_telemac,3)));system(cmd, show.output.on.console = TRUE)
         # curl -u nh32b12:etanche-morcelleraient-interposes ftp://eftp.ifremer.fr/scratch/C07_750832km_X652985Y1796740/C07_750832km_X652985Y1796740_SceMaxMedContFrance_00h_00m_14h_00m.cas_2023-11-27-17h46min09s.sortie --output C:\Cartino2D\France\FIONA3_5m\C07_750832km_X652985Y1796740\C07_750832km_X652985Y1796740_SceMaxMedContFrance_00h_00m_14h_00m.cas_2023-11-27-17h46min09s.sortie
         
         #   if(sc_telemac!=" int 0"){
         #     cmd <- paste0("curl -# -u ",hoteextrifremer,":",Mdpextrifremer," ftp://eftp.ifremer.fr",sc_telemac_ftp_path," --output ",dir_to_down,"\\",substring(sc_telemac,3))
-        #     print(paste0("Téléchargement de : ",substring(sc_telemac,3)));system(cmd)
+        #     print(paste0("Téléchargement de : ",substring(sc_telemac,3)));system(cmd, show.output.on.console = TRUE)
         #   
         #   
         #   
@@ -1524,11 +1528,11 @@ launch_cluster_tgcc <- function(){
     # write("quit",file=ftp_txt_file, append=T)
     # close(id_txt_file)
     # cmd <- paste0("ftp -n -s:",ftp_txt_file)
-    # print(cmd);system(cmd)
+    # print(cmd);system(cmd, show.output.on.console = TRUE)
     session <- ssh::ssh_connect(host = hotetgcc,passwd = MdPtgcc)
     scp_upload(session, zipfullname,to = paste0("/ccc/scratch/cont003/gen14287/",dir_cluster_tgcc,'/',contour$NOMPOST))
     # cmd <- paste0("curl -# -T ",zipfullname,' -u ',hoteextrifremer,":",Mdpextrifremer," ftp://eftp.ifremer.fr",zipnamecluster)
-    # print(paste0("Téléversement de : ",zipname));system(cmd)
+    # print(paste0("Téléversement de : ",zipname));system(cmd, show.output.on.console = TRUE)
     # curl -T zipfullname -u ftp://ftp.example.com/dir/path/
     
     
@@ -1836,15 +1840,15 @@ download_results_tgcc <- function(){
       res_file <- file.path(dir_from_down,substring(res_telemac,3))
       cmd = paste0(pscp_path," -unsafe -scp -pw ",MdPtgcc,
                    " ",hotetgcc,":",res_file," ",dir_to_down)
-      system(cmd)
+      system(cmd, show.output.on.console = TRUE)
       sc_file <- file.path(dir_from_down,substring(sc_telemac,3))
       cmd = paste0(pscp_path," -unsafe -scp -pw ",MdPtgcc,
                    " ",hotetgcc,":",sc_file," ",dir_to_down)
-      system(cmd)
+      system(cmd, show.output.on.console = TRUE)
       sortie_file <- file.path(dir_from_down,foldersortie,substring(sortie_telemac,3))
       cmd = paste0(pscp_path," -unsafe -scp -pw ",MdPtgcc,
                    " ",hotetgcc,":",sortie_file," ",dir_to_down)
-      system(cmd)
+      system(cmd, show.output.on.console = TRUE)
     }
     
   }else{

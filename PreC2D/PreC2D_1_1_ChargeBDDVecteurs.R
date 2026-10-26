@@ -59,19 +59,75 @@ Lien_html=function(url)
 
 if (nChoixPC2D1_1[1]==1)
 {
-  destfileBDTopo=""
-  links=Lien_html(urlBDTopo)
-  # Afficher les liens
-  links=links[-grep(links,pattern="SHP")]
+  # https://data.geopf.fr/telechargement/download/BDTOPO/BDTOPO_3-5_TOUSTHEMES_GPKG_RGAF09UTM20_D971_2026-03-15/BDTOPO_3-5_TOUSTHEMES_GPKG_RGAF09UTM20_D971_2026-03-15.7z
+    cat("\014")
+  #Initialiser une liste pour stocker le contenu
+  all_pages_Liens <- list()
+  # URL de base
+  # urlBDTopo <- "https://data.geopf.fr/telechargement/resource/BDTOPO"
+  # Boucle pour télécharger les pages 1 à 10
+  for (page in 1:9999) {
+    url <- ifelse(page == 1, urlBDTopo, paste0(urlBDTopo, "?page=", page))
+    cat("Traitement de l'URL :", url, "\n")
+    
+    # Chemin de destination pour enregistrer le fichier HTML
+    output_path <- file.path(dsnDptBDTopo,"_PAGE_HTML_ajeter",paste0("bdtopo_page_", page, ".html"))
+    if (dir.exists(dirname(output_path))==F){dir.create(dirname(output_path))}
+    # Télécharger le fichier directement
+    download.file(url = url,destfile = output_path,mode = "wb",quiet = FALSE)
+    
+    # Lire le contenu HTML
+    html_content <- read_html(output_path)
+    
+    # Extraire les liens
+    download_links <- html_content %>%
+      html_nodes("link") %>%
+      html_attr("href")
+    
+    # Filtrer les liens contenant "BDTOPO_"
+    bons_liens <- download_links[grepl("BDTOPO_", download_links, ignore.case = TRUE)]
+    
+    if (length(bons_liens) > 0) {
+      all_pages_Liens[[page]] <- bons_liens
+      cat("Liens valides trouvés sur la page", page, ":", length(bons_liens),"\n")
+    } else {
+      cat("Aucun lien valide trouvé sur la page", page, ". Arrêt de la boucle.","\n")
+      break
+    }
+  }
+  
+  # Fusionner toutes les listes de liens en une seule liste
+  all_links <- unlist(all_pages_Liens)
+  
+  # Supprimer les doublons (si nécessaire)
+  unique_links <- unique(all_links)
+  ici=grep(unique_links,pattern="TOUSTHEMES")
+  if(length(ici)>0){unique_links=unique_links[ici]}
+  cat("Nombre total de liens uniques TOUSTHEMES:", length(unique_links),"\n")
+  ici=grep(unique_links,pattern="GPKG")
+  if(length(ici)>0){unique_links=unique_links[ici]}
+  cat("Nombre total de liens uniques GPKG:", length(unique_links),"\n")
+  ici=grep(unique_links,pattern="_D")
+  if(length(ici)>0){unique_links=unique_links[ici]}
+  cat("Nombre total de liens uniques _D:", length(unique_links),"\n")
+  
+
+  links=sort(unique_links,decreasing = T)
+  
+  # Afficher le nombre total de liens uniques
+  cat("Nombre total de liens uniques:", length(links),"\n")
   
   for (idpt in ListeDpt)
   {
     numero=idpt
+    
     nliendpt=grep(links,pattern=paste0("_D",numero))
-    
+    cat("Données disponibles\n")
     print(links[nliendpt])
-    
-    url=links[nliendpt][1]
+    cat("Données à charger\n")
+    url=gsub("resource","download",links[nliendpt][1])
+    url=file.path(url,paste0(basename(basename(url)),".7z"))
+    cat(url,"\n")
     
     ChargeURL(dsnDptBDTopo,url,"")
     destfile=file.path(dsnDptBDTopo,basename(url))

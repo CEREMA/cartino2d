@@ -43,7 +43,7 @@ for (izs in nlal)
   
   # Analyse du pas de temps
   Pas_En_XY=ifelse(is.na(as.numeric(Exzeco))==F,Exzeco,Exz1_Dx)
-  RelaXT=Pas_En_XY/TIME_STEP
+  RelaXT=as.numeric(Pas_En_XY)/TIME_STEP
   if (RelaXT<2 | RelaXT>7)
   {
     ChoixTIME_STEP = cbind(
@@ -167,6 +167,7 @@ for (izs in nlal)
   cat("\n")
   
   nomsansrivieres=file.path(dsnlayer,"tmp_sansriviere.gpkg")
+  Beau=st_cast(Beau,"POLYGON")
   st_write(Beau,nomsansrivieres, delete_layer = T, quiet = T)
   
   nomBeau=file.path(dsnlayer, nom_exp)

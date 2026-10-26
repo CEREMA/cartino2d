@@ -1,39 +1,42 @@
-# if (nb_proc_preC2D<=1)
-# {
 source(file.path(chem_routine,"PreC2D","PreC2D_2_1_Zone_DPE_job.R"))
-for (iraci in 1:length(listraci))
-  # for (raci in substr(listraci,1,nchar(listraci)-10)[11])
+
+# ici=grep(listraci,pattern="hyeto")
+# if (length(ici)>0){listraci=listraci[ici[1]]}
+if (nb_proc_preC2D<=1)
 {
-  raci=substr(listraci[iraci],1,nchar(listraci[iraci])-10)
-  nomendo=paste0(raci,"_Endo.gpkg")
-  
-  if (file.exists(file.path(dsnDPE,nomendo))==F)
+  for (iraci in 1:length(listraci))
+    # for (raci in substr(listraci,1,nchar(listraci)-10)[11])
   {
+    raci=substr(listraci[iraci],1,nchar(listraci[iraci])-10)
+    nomendo=paste0(raci,"_Endo.gpkg")
+    
+    # if (file.exists(file.path(dsnDPE,nomendo))==F)
+    # {
     # nomendomanuel=PreC2D_1_1_Zone_DPE_job(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resolution)
-    PreC2D_1_1_Zone_DPE_job(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resolution)
-  }else{
-    cat(nomendo, "existe déjà")
+    PreC2D_1_1_Zone_DPE_job(SecteurGRASS_,qgis_process,icontour,iraci,raci,Extens,dsnDPE,resolution)
+    # }else{
+    #   cat(nomendo, "existe déjà")
+    # }
   }
+}else{
+  
+  nb_proc_preC2D_=min(floor(0.6*detectCores()),nb_proc_preC2D,length(listraci))
+  cat("## ------ ",length(listraci)," secteurs à traiter -------------##\n")
+  cat("--- PRE  --- ",nb_proc_preC2D_  ," CALCULS MODE PARALLELE sur ",nb_proc_preC2D," proposés utilisateur-------------\n")
+  
+  require(foreach)
+  cl <- parallel::makeCluster(nb_proc)
+  registerDoParallel(cl)
+  foreach(iraci = 1:length(listraci),
+          .inorder = FALSE,
+          .packages = c("sf","dplyr")
+  ) %dopar%
+    {
+      raci=substr(listraci[iraci],1,nchar(listraci[iraci])-10)
+      PreC2D_1_1_Zone_DPE_job(SecteurGRASS_,qgis_process,icontour,iraci,raci,Extens,dsnDPE,resolution)
+    }
+  stopCluster(cl)
 }
-# }else{
-#   nb_proc=nb_proc_preC2D
-#   cat("------ ",nb_proc            ," CALCULS MODE PARALLELE -------------\n")
-#   require(foreach)
-#   cl <- parallel::makeCluster(nb_proc)
-#   registerDoParallel(cl)
-#   foreach(iraci = 1:length(listraci),
-#           .inorder = FALSE,
-#           .packages = c("sf","dplyr")
-#   ) %dopar%
-#     {
-#       PreC2D_1_1_Zone_DPE_job(SecteurGRASS_,iraci,raci,Extens,dsnDPE,resolution)
-#     }
-#   stopCluster(cl)
-# }
-
-
-
-
 
 cat("\n")
 cat("\n")

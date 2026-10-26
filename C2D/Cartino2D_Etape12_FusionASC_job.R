@@ -10,7 +10,7 @@ Cartino2D_Etape12_FusionASC_job=function(dsnlayer,contour,contours,SecteurGRASS_
   {
     
     listeSCOH=list.files(file.path(dsnlayer,contour$NOMPOST),pattern=iext,recursive = T,full.names = T)
-    
+
     CPattern=strsplit(Scena[isc]," ")[[1]]
     for (ip in 1:length(CPattern))
     {
@@ -24,14 +24,41 @@ Cartino2D_Etape12_FusionASC_job=function(dsnlayer,contour,contours,SecteurGRASS_
     
     if (length(listeSCOH)>0)
     {
+      # if (iext=="SC_Qmax.gpkg")
+      # {
+      #   listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x)[,cbind("ID","NOM","numsec","Time","Q","Zmoy","Zmax","Zmin","Hmax","Htot","NomSecteur","H_Obs","Q_Obs","Z_Obs")],SECTEUR=basename(x))})
+      # }else{
+      #   # listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x),SECTEUR=basename(x))})
+      #   listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x)[,cbind("ID","MATERIAUX","LRG","HAUT1","HAUT2","Z1","Z2","FRIC","CIRC","TYPE_OUVRA","SECT_HYDRO","LENGTH","MaxQ")],SECTEUR=basename(x))})
+      # }    
+
       if (iext=="SC_Qmax.gpkg")
       {
-        listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x)[,cbind("ID","NOM","numsec","Time","Q","Zmoy","Zmax","Zmin","Hmax","Htot","NomSecteur","H_Obs","Q_Obs","Z_Obs")],SECTEUR=basename(x))})
+        # lapply(listeSCOH, function(x) {colnames(st_read(x)[,cbind("ID","NOM","DATE","Q","Zmoy","Hmax","NomSecteur")])})
+        listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x)[,cbind("ID","NOM","DATE","Q","Zmoy","Hmax","NomSecteur")],SECTEUR=basename(x))})
       }else{
+        # browser()
         # listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x),SECTEUR=basename(x))})
-        listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x)[,cbind("ID","MATERIAUX","LRG","HAUT1","HAUT2","Z1","Z2","FRIC","CIRC","TYPE_OUVRA","SECT_HYDRO","LENGTH","MaxQ")],SECTEUR=basename(x))})
+        nomcolo=lapply(listeSCOH, function(x) {colnames(st_read(x))})
+        cat("###### debut de vérif\n")
+        for (OHVerif in listeSCOH)
+        {
+          cat(OHVerif,"\n")
+          SF_Verif=st_read(OHVerif)
+          nomcolverif=cbind("ID","NAME","LRG","HAUT1","HAUT2","Z1","Z2","FRIC","CIRC","LENGTH","MaxQ")
+          for (icolverif in nomcolverif)
+          {
+            nbv=which(colnames(SF_Verif)==icolverif)
+            if (length(nbv)==0)
+            {
+              cat("bug: ",icolverif,"\n")
+            }
+          }
+        }
+        listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x)[,cbind("ID","LRG","HAUT1","HAUT2","Z1","Z2","FRIC","CIRC","LENGTH","MaxQ")],SECTEUR=basename(x))})
+        # listeGPKG=lapply(listeSCOH, function(x) {cbind(st_read(x)[,cbind("ID","NAME","LRG","HAUT1","HAUT2","Z1","Z2","FRIC","CIRC","LENGTH","MaxQ")],SECTEUR=basename(x))})
       }    
-
+      
       SCOH_Fus=do.call(rbind, listeGPKG)
       # print(SCOH_Fus$SECTEUR)
       st_write(SCOH_Fus,file.path(dsnlayerRes,paste0(nompost[ipost],"_",gsub(" ","_",Scena[isc]),"_",iext)),delete_layer = T, quiet = T)

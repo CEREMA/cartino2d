@@ -179,14 +179,15 @@ if (nPreC2D[2]==1)
   
   contours=ChoixContours(dsnlayer,nomlayerC)
   contours=ChoixContours_Sect_ou_Fus(contours)
-
+  
   # for (icontour in 1:nrow(contours))
-  for (icontour in nrow(contours):1)
+  ###############################################################
+  prepa_PreC2D_2xxx=function(contours,icontour)
   {
     dsnDPE=
       # ifelse(nChoixSF[1]==1,
       ifelse(dim(contours)[2]>3,
-             file.path(dsnlayer,contours$NOMPOST[icontour],contours$NOM[icontour],"POST"),
+             file.path(dsnlayer,contours$NOMPOST[icontour],contours$NOM[icontour],"Post"),
              file.path(dsnlayer,contours$NOMPOST[icontour],"_Fusion")
       )
     
@@ -201,104 +202,154 @@ if (nPreC2D[2]==1)
     }
     
     listraci=list.files(dsnDPE,"HWH_m.gpkg$")
-    if (nPreC2D_Sect[1]==1)
-    {
-      source(file.path(chem_routine,"PreC2D","PreC2D_2_1_Zone_DPE.R"))
-    }
-    #------------- PreC2D_2_2_DetectPONTS_OH.R
-    if (nPreC2D_Sect[2]==1)
-    {
-      # Cest_Contour_pas_Zone=1
-      Zones=st_buffer(contours[icontour,],1000)
-      Zones$ZONE=contours$NOM[icontour]
-      dsnexport=dsnDPE
-      if (dir.exists(dsnexport)==F){dir.create(dsnexport)}
-      source(file.path(chem_routine,"PreC2D","PreC2D_2_2_DetectPONTS_OH.R"))
-    }
     
-    #--------------- PreC2D_2_3_MNT_Endoreismes_ZPP.R
-    if (nPreC2D_Sect[3]==1)
+    ici=grep(listraci,pattern="Evts")
+    if (length(listraci)>length(ici) & length(ici)>0)
     {
+      listraci=listraci[-ici][1]
+    }
+    return(list(dsnDPE,GestNomMasq,listraci))
+  }
+  ###############################################################
+  if (nrow(contours)>1 & nb_proc_preC2D>1)
+  {
+    source(file.path(chem_routine,"PreC2D","PreC2D_2_1_Zone_DPE_job.R"))
+    nb_proc_preC2D_=min(floor(0.6*detectCores()),nb_proc_preC2D,nrow(contours))
+    cat("## ------ ",nrow(contours)," secteurs à traiter -------------##\n")
+    cat("--- PREC2D  --- ",nb_proc_preC2D_  ," CALCULS MODE PARALLELE sur ",nb_proc_preC2D," proposés utilisateur-------------\n")
+    
+    require(foreach)
+    cl <- parallel::makeCluster(nb_proc_preC2D_)
+    registerDoParallel(cl)
+    foreach(icontour = nrow(contours):1,
+            .inorder = FALSE,
+            .packages = c("sf","dplyr")
+    ) %dopar%
+      {
+        recup=prepa_PreC2D_2xxx(contours,icontour)
+        dsnDPE=recup[[1]]
+        GestNomMasq=recup[[2]]
+        listraci=recup[[3]]
+        for (iraci in 1:length(listraci))
+        {
+          raci=substr(listraci[iraci],1,nchar(listraci[iraci])-10)
+          PreC2D_1_1_Zone_DPE_job(SecteurGRASS_,qgis_process,icontour,iraci,raci,Extens,dsnDPE,resolution)
+        }
+      }
+    stopCluster(cl)
+    
+    cat("\n")
+  }else{
+    
+    
+    for (icontour in nrow(contours):1)
+    {
+      recup=prepa_PreC2D_2xxx(contours,icontour)
+      dsnDPE=recup[[1]]
+      GestNomMasq=recup[[2]]
+      listraci=recup[[3]]
       
-      for (raci in substr(listraci,1,nchar(listraci)-10))
-      { print(raci)
+      if (nPreC2D_Sect[1]==1)
+      {
+        source(file.path(chem_routine,"PreC2D","PreC2D_2_1_Zone_DPE.R"))
+      }
+      #------------- PreC2D_2_2_DetectPONTS_OH.R
+      if (nPreC2D_Sect[2]==1)
+      {
         # Cest_Contour_pas_Zone=1
-        ZONE=st_buffer(contours[icontour,],1000)
-        ZONE$ZONE=contours$NOM[icontour]
-        nomZPP=file.path(dsnDPE,list.files(dsnDPE,"_ZPP_Final.gpkg")[1])
-        nomInond_Endo=list.files(dsnDPE,"_Endo_Manuel.gpkg")
-        source(file.path(chem_routine,"PreC2D","PreC2D_2_3_MNT_Endoreismes_ZPP.R"))
-      }
-    }
-    
-    #--------------- PreC2D_2_4_TauDEM.R
-    if (nPreC2D_Sect[4]==1)
-    {
-      for (raci in substr(listraci,1,nchar(listraci)-10))
-      {
-        PreC2D_03_TauDEM=1
-        chemin=dirname(dsnDPE)
-        setwd(dir=chemin)
-        ## NE PAS MODIFIER ------------------------------------------------------------
-        dir  = basename(dsnDPE)
-        dir_tau_riv = basename(dsnDPE)
-        riv_name=paste0(raci,"_MNTPourEndo")
-        format_MNT=".tif"
-        src_thres=rbind(c(10,5,2,1,0.5)*1e6,matrix(ResoMNTpourTaudem,1,5))
-        nb_riv=1
-        dirProjQgz=file.path(chem_routine,"C2D",Doss_Qml)
-        
-        source(file.path(chem_routine,"PreC2D","PreC2D_2_4_TauDEM.R"))
-      }
-    }
-    
-    #--------------- PreC2D_2_5_Secto_Pluie.R
-    if (nPreC2D_Sect[5]==1)
-    { 
-      for (raci in substr(listraci,1,nchar(listraci)-10))
-      {
-        watershed=file.path(dsnDPE,paste0(raci,"_MNTpourEndo"),"500000","watershed.shp")
-        Bords=file.path(dsnDPE,paste0(raci,"_MNTpourEndo"),"500000","Bords.shp") # Attention 0.5km²
-        NomReseau=file.path(dsnDPE,paste0(raci,"_MNTpourEndo"),"5000000","streamnet.shp")# attention 5km2
-        source(file.path(chem_routine,"PreC2D","PreC2D_2_5_Secto_Pluie.R"))
-      }
-    }
-    
-    #--------------- PreC2D_2_6_PHE
-    
-    if (nPreC2D_Sect[6]==1)
-    {
-      listraci=list.files(dsnDPE,"Aext")
-      PHE=st_read(file.path(dsnPHE,nomPHE))
-      for (raci in listraci)
-      {
-        source(file.path(chem_routine,"PreC2D","PreC2D_2_6_PHE.R"))
+        Zones=st_buffer(contours[icontour,],1000)
+        Zones$ZONE=contours$NOM[icontour]
+        dsnexport=dsnDPE
+        if (dir.exists(dsnexport)==F){dir.create(dsnexport)}
+        source(file.path(chem_routine,"PreC2D","PreC2D_2_2_DetectPONTS_OH.R"))
       }
       
-      # on pourrait gérer avec une gestion de scénario comme étape C2D10
-    }
-    
-    #--------------- PreC2D_2_7_RemodelageDEBIT
-    listraci=list.files(dsnDPE,"HWH_m.gpkg$")
-    if (nPreC2D_Sect[7]==1)
-    {
-      for (raci in substr(listraci,1,nchar(listraci)-10))
+      #--------------- PreC2D_2_3_MNT_Endoreismes_ZPP.R
+      if (nPreC2D_Sect[3]==1)
       {
-        source(file.path(chem_routine,"PreC2D","PreC2D_2_7_RemodelageDEBIT.R"))
+        for (raci in substr(listraci,1,nchar(listraci)-10))
+        { print(raci)
+          # Cest_Contour_pas_Zone=1
+          ZONE=st_buffer(contours[icontour,],1000)
+          ZONE$ZONE=contours$NOM[icontour]
+          nomZPP=file.path(dsnDPE,list.files(dsnDPE,"_ZPP_Final.gpkg")[1])
+          nomInond_Endo=list.files(dsnDPE,"_Endo_Manuel.gpkg")
+          source(file.path(chem_routine,"PreC2D","PreC2D_2_3_MNT_Endoreismes_ZPP.R"))
+        }
       }
-    }
-    
-    
-    if (GestNomMasq==1)
-    {
-      unlink(nommasque)
-      GestNomMasq=0
+      
+      #--------------- PreC2D_2_4_TauDEM.R
+      if (nPreC2D_Sect[4]==1)
+      {
+        for (raci in substr(listraci,1,nchar(listraci)-10))
+        {
+          PreC2D_03_TauDEM=1
+          chemin=dirname(dsnDPE)
+          setwd(dir=chemin)
+          ## NE PAS MODIFIER ------------------------------------------------------------
+          dir  = basename(dsnDPE)
+          dir_tau_riv = basename(dsnDPE)
+          riv_name=paste0(raci,"_MNTPourEndo")
+          format_MNT=".tif"
+          src_thres=rbind(c(10,5,2,1,0.5)*1e6,matrix(ResoMNTpourTaudem,1,5))
+          nb_riv=1
+          dirProjQgz=file.path(chem_routine,"C2D",Doss_Qml)
+          
+          source(file.path(chem_routine,"PreC2D","PreC2D_2_4_TauDEM.R"))
+        }
+      }
+      
+      #--------------- PreC2D_2_5_Secto_Pluie.R
+      if (nPreC2D_Sect[5]==1)
+      { 
+        for (raci in substr(listraci,1,nchar(listraci)-10))
+        {
+          watershed=file.path(dsnDPE,paste0(raci,"_MNTpourEndo"),"500000","watershed.shp")
+          Bords=file.path(dsnDPE,paste0(raci,"_MNTpourEndo"),"500000","Bords.shp") # Attention 0.5km²
+          NomReseau=file.path(dsnDPE,paste0(raci,"_MNTpourEndo"),"5000000","streamnet.shp")# attention 5km2
+          source(file.path(chem_routine,"PreC2D","PreC2D_2_5_Secto_Pluie.R"))
+        }
+      }
+      
+      #--------------- PreC2D_2_6_PHE
+      
+      if (nPreC2D_Sect[6]==1)
+      {
+        listraci=list.files(dsnDPE,"Aext")
+        PHE=st_read(file.path(dsnPHE,nomPHE))
+        for (raci in listraci)
+        {
+          source(file.path(chem_routine,"PreC2D","PreC2D_2_6_PHE.R"))
+        }
+        
+        # on pourrait gérer avec une gestion de scénario comme étape C2D10
+      }
+      
+      #--------------- PreC2D_2_7_RemodelageDEBIT
+      listraci=list.files(dsnDPE,"HWH_m.gpkg$")
+      if (nPreC2D_Sect[7]==1)
+      {
+        for (raci in substr(listraci,1,nchar(listraci)-10))
+        {
+          source(file.path(chem_routine,"PreC2D","PreC2D_2_7_RemodelageDEBIT.R"))
+        }
+      }
+      
+      
+      if (GestNomMasq==1)
+      {
+        # unlink(nommasque)
+        GestNomMasq=0
+      }
     }
   }
-  
   if (exists("raci")==T)
   {
     listraci=list.files(dsnDPE,"HWH_m.gpkg$")
+    
+    ici=grep(listraci,pattern="hyeto")
+    if (length(ici)>0){listraci=listraci[ici[1]]}
+    
     for (raci in substr(listraci,1,nchar(listraci)-10))
     {
       nomQgsDPE=file.path(dsnDPE,paste0("Projet_Sectorisation",raci,".qgs"))
@@ -420,7 +471,7 @@ if (nPreC2D[6]==1)
     "6.1. PostZIpour maillage_ou_ALEA",
     "6.2. Decrenelage"
   )
-  nPreC2D_6=FILINO_BDD("Emprise ZI pour maillage fin / Alea (souvent après 2ème calcul C2D intermédiaire Ex:5m) - simplification, décrénelage...",NULL,ChoixPreC2D_Sect)
+  nPreC2D_6=FILINO_BDD("Emprise ZI pour maillage fin / Alea (souvent après 2ème calcul C2D intermédiaire Ex:5m) - simplification, décrénelage...",NULL,ChoixPreC2D_6)
   if (nPreC2D_6[1]==1)
   {
     source(file.path(chem_routine,"PreC2D","PreC2D_6_1_PostZIpour maillage_ou_ALEA.R"))
@@ -442,7 +493,7 @@ if (nPreC2D[7]==1)
   
   # lecture de spoints où on veut mettre des sections de controle
   SH=st_read(nomSH)
-
+  
   for (icontour in 1:nrow(contours))
   {
     dsnDPE=    ifelse(is.na(contours$NOM[icontour])==F,
@@ -469,7 +520,7 @@ if (nPreC2D[7]==1)
 if (nPreC2D[8]==1)
 {
   
-  nomCE="C:\\AFFAIRES\\EAIM\\EAIM_DEBITS.gpkg"
+  nomCE="C:\\AFFAIRES\\CarteSocle\\CarteSocle_DEBITS.gpkg"
   Buf8_CE=50
   Buf8Cont_ic=2500
   Buf8Cont_ic_neg=-500
@@ -556,11 +607,11 @@ if (nPreC2D[8]==1)
         file.create(nom_ascvrt)
         write(listeASC, file = nom_ascvrt, append = T)
         vrtfile = paste0(dsnLidar, "\\", contour_$NOM, ".vrt") ##chemin du vrt à créer
-        cmd = paste(shQuote(OSGeo4W_path),"gdalbuildvrt",vrtfile,"-input_file_list",nom_ascvrt)
+        cmd = paste(if (startsWith(OSGeo4W_path, "\"")) OSGeo4W_path else shQuote(OSGeo4W_path),"gdalbuildvrt",vrtfile,"-input_file_list",nom_ascvrt)
         print(cmd);system(cmd)
         unlink(nom_ascvrt)
         
-        # 'E:/RGEAlti1m/France/_Reso025//C0161_187038km_X762384Y7024169.vrt'  --COPY_SUBDATASETS=false --OPTIONS= --EXTRA= --DATA_TYPE=0 --OUTPUT='C:/Cartino2D/France/EAIM/C0161_187038km_X762384Y7024169/ccc.tiff'
+        # 'E:/RGEAlti1m/France/_Reso025//C0161_187038km_X762384Y7024169.vrt'  --COPY_SUBDATASETS=false --OPTIONS= --EXTRA= --DATA_TYPE=0 --OUTPUT='C:/Cartino2D/France/CarteSocle/C0161_187038km_X762384Y7024169/ccc.tiff'
         riv_name_brut=file.path(dsnDPE[ic],paste0(contour_$NOM,"_MNT1PourContourbrut.tif"))
         cmd <- paste0(qgis_process, " run gdal:translate",
                       " --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019 ",
@@ -683,7 +734,7 @@ if (nPreC2D[8]==1)
           nomBuf_pour_mer= "H:/FILINO_Travail/00_SIGBase/DEPARTEMENT_Buf_pour_mer.shp"
           nomwatershdcontinent=file.path(chemin,repPetBv,"watershed_cont.shp")
           
-          cmd=paste0(shQuote(qgis_process),
+          cmd=paste0(if (startsWith(qgis_process, "\"")) qgis_process else shQuote(qgis_process),
                      " run native:clip", 
                      " --distance_units=meters",
                      "--area_units=m2",

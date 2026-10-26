@@ -1,4 +1,4 @@
-Decrenelage=function (nomrtovect,AireMin_Inter,AireMin_Exter,EPSG,Reso)
+Decrenelage=function (nomrtovect,AireMin_Inter,AireMin_Exter,EPSG,Reso,qgis_process=NULL)
 {
   # Effacer la console
   cat("\014")
@@ -44,6 +44,13 @@ Decrenelage=function (nomrtovect,AireMin_Inter,AireMin_Exter,EPSG,Reso)
   
   # Lire les données vecteur
   vect <- st_read(nomnoholes)
+  
+  # SECURITE : Si le vecteur est completement vide (ex: Alea 4 inexistant)
+  if (nrow(vect) == 0) {
+    cat("Vecteur vide, on evite le decrenelage pour ne pas crasher!\n")
+    file.copy(nomrtovect, nomfinal2, overwrite = TRUE)
+    return(nomfinal2)
+  }
   
   ###############################################################################
   # GESTION DES POINTS DE CONTACT
@@ -94,71 +101,43 @@ Decrenelage=function (nomrtovect,AireMin_Inter,AireMin_Exter,EPSG,Reso)
     if (NPoly>1)
     {
       cat(format(Sys.time(),format="%Y%m%d_%H%M%S"),"\n")
-      # Calculer les points milieux et créer de nouveaux polygones
-      if (EtapDecrProc[1]==1)
-      {
-        pgb <- txtProgressBar(min = 0, max = length(NPoly), style = 3)
-        for (incL2 in 1:length(NPoly)) 
-        {
-          setTxtProgressBar(pgb, incL2)
-          IndiF=DebutFin(incL2)
-          Coords[IndiF,6]=1
-        }
-        cat("\n")
-      }else{
-        
-        #Mode Parallèle
-        cat("------ ",EtapDecrProc[1]," CALCULS MODE PARALLELE -------------\n")
-        require(foreach)
-        cl <- parallel::makeCluster(EtapDecrProc[1])
-        doParallel::registerDoParallel(cl)
-        foreach(incL2 = 1:length(NPoly),
-                .combine = 'c',
-                .inorder = FALSE,
-                .export = "DebutFin") %dopar% 
-          {
-            IndiF=DebutFin(incL2)
-            Coords[IndiF,6]=1
-          }
-        parallel::stopCluster(cl)
-      }
-
+      # Identification vectorisée (instantanée) du 1er point de chaque polygone/anneau
+      L_cols <- grep("^L", colnames(Coords), value = TRUE)
+      Coords$DebFin[!duplicated(Coords[, L_cols, drop = FALSE])] <- 1
+      
       cat(format(Sys.time(),format="%Y%m%d_%H%M%S"),"\n")
-      # Supprimer les doublons
-      
-      # Récupération du 1er point de tous les polygones (on considère qu'il est égal au dernier)
+      # Supprimer les doublons début/fin
       cat(dim(Coords), "\n")
-      Coords$DebFin[sapply(unique(Coords$L2), function(x) {which(Coords$L2==x)[1]})]=1
-      
-      Coords <- Coords[-which(Coords$DebFin == 1), ]
+      Coords <- Coords[Coords$DebFin != 1, ]
       cat(dim(Coords), "\n")
-      # browser()
+      
       # Trier les coordonnées et identifier les doublons
       Coords <- Coords[order(Coords$X, Coords$Y, Coords$L1, Coords$L2), ]
-      indi <- 1:(dim(Coords)[1] - 1)
-      Coords$Doublons[-1] <- ifelse((Coords[indi + 1, 1] - Coords[indi, 1]) == 0 & (Coords[indi + 1, 2] - Coords[indi, 2]) == 0, 1, 0)
-      # browser()
-      # Sélectionner les doublons
-      Coords <- Coords[which(Coords$Doublons == 1), ]
+      is_doublon <- c(FALSE, (Coords$X[-1] == Coords$X[-nrow(Coords)]) & (Coords$Y[-1] == Coords$Y[-nrow(Coords)]))
+      Coords <- Coords[is_doublon, ]
       cat(dim(Coords), "\n")
       
-      # Créer des points à partir des coordonnées et les écrire dans un fichier GeoPackage
-      Pts <- st_cast(st_sfc(st_multipoint(x = as.matrix(Coords[, 1:2]), dim = "XY")), "POINT")
-      st_crs(Pts) <- EPSG
-      st_write(Pts, nompts, delete_layer = T, quiet = T)
-      
-      # Créer des carrés à partir des points et les écrire dans un fichier GeoPackage
-      Carre <- st_buffer(Pts, endCapStyle = "SQUARE", dist = 1.001* (Reso / 2) * 2^0.5 / 2)
-      st_write(Carre, nomcarre, delete_layer = T, quiet = T)
-      
-      # Utiliser QGIS pour créer des losanges en faisant pivoter les carrés de 45 degrés et les écrire dans un fichier GeoPackage
-      cmd <- paste0(qgis_process, " run native:rotatefeatures",
-                    " --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019 ",
-                    " --INPUT=", shQuote(nomcarre),
-                    " ANGLE=45",
-                    " --OUTPUT=", nomlosange)
-      
-      print(cmd); system(cmd)
+      has_losanges = FALSE
+      if (nrow(Coords) > 0) {
+        has_losanges = TRUE
+        # Créer des points à partir des coordonnées et les écrire dans un fichier GeoPackage
+        Pts <- st_cast(st_sfc(st_multipoint(x = as.matrix(Coords[, 1:2]), dim = "XY")), "POINT")
+        st_crs(Pts) <- EPSG
+        st_write(Pts, nompts, delete_layer = T, quiet = T)
+        
+        # Créer des carrés à partir des points et les écrire dans un fichier GeoPackage
+        Carre <- st_buffer(Pts, endCapStyle = "SQUARE", dist = 1.001* (Reso / 2) * 2^0.5 / 2)
+        st_write(Carre, nomcarre, delete_layer = T, quiet = T)
+        
+        # Utiliser QGIS pour créer des losanges en faisant pivoter les carrés de 45 degrés et les écrire dans un fichier GeoPackage
+        cmd <- paste0(qgis_process, " run native:rotatefeatures",
+                      " --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019 ",
+                      " --INPUT=", shQuote(nomcarre),
+                      " ANGLE=45",
+                      " --OUTPUT=", nomlosange)
+        
+        print(cmd); system(cmd)
+      }
     }
   }
   ################################################################################
@@ -167,17 +146,25 @@ Decrenelage=function (nomrtovect,AireMin_Inter,AireMin_Exter,EPSG,Reso)
   # ----------------- Fonction appelée en boucle ---------------------------------
   modif_GEOM=function(ivect)
   {
-    coords_list <- list()
-    
     setTxtProgressBar(pgb, ivect)
     
     Coords <- st_coordinates(st_geometry(Vect2[ivect, ]))
-    nmorc <- unique(Coords[, 3])
-    for (incL1 in nmorc) {
-      nbL1 <- which(Coords[, 3] == incL1)
-      nbL1_ <- nbL1[c(2:length(nbL1), 2)]
-      coords_list[[incL1]] <- as.matrix((Coords[nbL1, 1:2] + Coords[nbL1_, 1:2]) / 2)
+    
+    # Optimisation vectorisée : split des indices par L1 (colonne 3) pour éviter le which() en O(N^2)
+    ring_indices <- split(seq_len(nrow(Coords)), Coords[, 3])
+    
+    max_L1 <- max(as.integer(names(ring_indices)))
+    coords_list <- vector("list", max_L1)
+    
+    for (i in seq_along(ring_indices)) {
+      incL1 <- as.integer(names(ring_indices)[i])
+      idx <- ring_indices[[i]]
+      idx_shift <- idx[c(2:length(idx), 2)]
+      coords_list[[incL1]] <- as.matrix((Coords[idx, 1:2, drop = FALSE] + Coords[idx_shift, 1:2, drop = FALSE]) / 2)
     }
+    
+    # Supprimer les éventuels éléments NULL si L1 n'est pas continu
+    coords_list <- coords_list[!sapply(coords_list, is.null)]
     return(coords_list)
   }
   # ----------------- Fonction appelée en boucle ---------------------------------
@@ -195,16 +182,18 @@ Decrenelage=function (nomrtovect,AireMin_Inter,AireMin_Exter,EPSG,Reso)
       cat("Calculer les points milieux et modifier les polygones\n")
       # Mode Classique
       pgb <- txtProgressBar(min = 0, max = dim(Vect2)[1], style = 3)
+      new_geoms <- vector("list", dim(Vect2)[1])
       for (ivect in 1:dim(Vect2)[1])
       {
         coords_list=modif_GEOM(ivect)
         if (length(coords_list) == 1) {
-          st_geometry(Vect2[ivect, ]) <- st_sfc(st_polygon(list(coords_list[[1]])), crs = EPSG)
+          new_geoms[[ivect]] <- st_polygon(list(coords_list[[1]]))
         } else {
           # On pourrait calculer l'aire des polygones intérieurs...
-          st_geometry(Vect2[ivect, ]) <- st_sfc(st_polygon(coords_list), crs = EPSG)
+          new_geoms[[ivect]] <- st_polygon(coords_list)
         }
       }
+      st_geometry(Vect2) <- st_sfc(new_geoms, crs = EPSG)
       cat("\n")
     }else{
       #Mode Parallèle
@@ -212,20 +201,32 @@ Decrenelage=function (nomrtovect,AireMin_Inter,AireMin_Exter,EPSG,Reso)
       require(foreach)
       cl <- parallel::makeCluster(EtapDecrProc[2])
       doParallel::registerDoParallel(cl)
-      foreach(ivect = 1:dim(Vect2)[1],
+      
+      new_geoms_list <- foreach(ivect = 1:dim(Vect2)[1],
               .packages = c("sf"),
               .combine = 'c',
-              .inorder = FALSE) %dopar% 
+              .inorder = TRUE) %dopar% 
         {
-          coords_list=modif_GEOM(ivect)
+          Coords_par <- sf::st_coordinates(sf::st_geometry(Vect2[ivect, ]))
+          ring_indices <- split(seq_len(nrow(Coords_par)), Coords_par[, 3])
+          max_L1 <- max(as.integer(names(ring_indices)))
+          coords_list <- vector("list", max_L1)
+          for (i in seq_along(ring_indices)) {
+            incL1 <- as.integer(names(ring_indices)[i])
+            idx <- ring_indices[[i]]
+            idx_shift <- idx[c(2:length(idx), 2)]
+            coords_list[[incL1]] <- as.matrix((Coords_par[idx, 1:2, drop = FALSE] + Coords_par[idx_shift, 1:2, drop = FALSE]) / 2)
+          }
+          coords_list <- coords_list[!sapply(coords_list, is.null)]
+          
           if (length(coords_list) == 1) {
-            st_geometry(Vect2[ivect, ]) <- st_sfc(st_polygon(list(coords_list[[1]])), crs = EPSG)
+            list(sf::st_polygon(list(coords_list[[1]])))
           } else {
-            # On pourrait calculer l'aire des polygones intérieurs...
-            st_geometry(Vect2[ivect, ]) <- st_sfc(st_polygon(coords_list), crs = EPSG)
+            list(sf::st_polygon(coords_list))
           }
         }
       
+      st_geometry(Vect2) <- st_sfc(new_geoms_list, crs = EPSG)
       parallel::stopCluster(cl)
       
     }
@@ -239,20 +240,29 @@ Decrenelage=function (nomrtovect,AireMin_Inter,AireMin_Exter,EPSG,Reso)
   {
     if (NPoly>1)
     {
-      # Fusionner les polygones décalés avec les losanges à l'aide de QGIS
-      cmd <- paste0(qgis_process, " run native:mergevectorlayers",
-                    " --LAYERS=", shQuote(nomdecre1),
-                    " --LAYERS=", shQuote(nomlosange),
-                    " --CRS=QgsCoordinateReferenceSystem('EPSG:", EPSG, "') ",
-                    " --OUTPUT=", shQuote(nommerge))
-      print(cmd); system(cmd)
-      
-      # Créer une mise en tampon autour des polygones fusionnés à l'aide de QGIS
-      cmd <- paste0(qgis_process, " run native:buffer",
-                    " --INPUT=", shQuote(nommerge),
-                    " --DISTANCE=0 --SEGMENTS=5 --END_CAP_STYLE=0 --JOIN_STYLE=0 --MITER_LIMIT=2 --DISSOLVE=True",
-                    " --OUTPUT=", shQuote(nombuffer))
-      print(cmd); system(cmd)
+      if (exists("has_losanges") && has_losanges) {
+        # Fusionner les polygones décalés avec les losanges à l'aide de QGIS
+        cmd <- paste0(qgis_process, " run native:mergevectorlayers",
+                      " --LAYERS=", shQuote(nomdecre1),
+                      " --LAYERS=", shQuote(nomlosange),
+                      " --CRS=QgsCoordinateReferenceSystem('EPSG:", EPSG, "') ",
+                      " --OUTPUT=", shQuote(nommerge))
+        print(cmd); system(cmd)
+        
+        # Créer une mise en tampon autour des polygones fusionnés à l'aide de QGIS
+        cmd <- paste0(qgis_process, " run native:buffer",
+                      " --INPUT=", shQuote(nommerge),
+                      " --DISTANCE=0 --SEGMENTS=5 --END_CAP_STYLE=0 --JOIN_STYLE=0 --MITER_LIMIT=2 --DISSOLVE=True",
+                      " --OUTPUT=", shQuote(nombuffer))
+        print(cmd); system(cmd)
+      } else {
+        # Si pas de losanges, on buffer/dissolve directement nomdecre1
+        cmd <- paste0(qgis_process, " run native:buffer",
+                      " --INPUT=", shQuote(nomdecre1),
+                      " --DISTANCE=0 --SEGMENTS=5 --END_CAP_STYLE=0 --JOIN_STYLE=0 --MITER_LIMIT=2 --DISSOLVE=True",
+                      " --OUTPUT=", shQuote(nombuffer))
+        print(cmd); system(cmd)
+      }
     }else{
       nombuffer=nomdecre1
     }

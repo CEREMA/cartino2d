@@ -29,7 +29,7 @@ nomgBasVers="BasVers"
 # st_crs(BasVers)=EPSG
 nom_Buffer         =file.path(dsnDPE,"BasVers_watershedBuffer.gpkg")
 nom_Bufsanstrou    =file.path(dsnDPE,"BasVers_watershedBuffer_sanstrous.gpkg")
-nom_BufSatr_Reduit =file.path(dsnDPE,"BasVers_watershedBuffer_sanstrous_reduit.gpkg")
+nom_BufSatr_Reduit =file.path(dsnDPE,"BasVers_watershedBuffer_sanstrous_reduit.shp")
 NomBV_GPKG         =watershed#file.path(dsnDPE,"BasVers.gpkg")
 nomBV_GPKG_Coup    =file.path(dsnDPE,"BasVersINIetBordCoup.gpkg")
 nomBV_GPKG_Coup2   =file.path(dsnDPE,"BasVersINIetBordCoup2.gpkg")
@@ -37,21 +37,21 @@ nomBV_GPKG_Coup2Uni=file.path(dsnDPE,"BasVersINIetBordCoup2Uni.gpkg")
 NomReseauBuf       =file.path(dsnDPE,"ReseauBuf.gpkg")
 NomReseauBufUni    =file.path(dsnDPE,"ReseauBufUni.gpkg")
 
-# st_write(BasVers,NomBV_GPKG, delete_layer=T, quiet=T)
-
+# Buffer sur l'ensemble des bassins versants
 cmd <- paste0(qgis_process, " run native:buffer",
               " --INPUT=", shQuote(watershed),
               " --DISTANCE=0 --SEGMENTS=5 --END_CAP_STYLE=0 --JOIN_STYLE=0 --MITER_LIMIT=2 --DISSOLVE=True",
               " --OUTPUT=", shQuote(nom_Buffer))
 print(cmd); system(cmd)
 
-# Enlever les petits trous
+# Suppression des petits trous intérieur
 cmd <- paste0(qgis_process, " run native:deleteholes",
               " --INPUT=", shQuote(nom_Buffer),
               " --MIN_AREA=", 1000000,
               " --OUTPUT=", shQuote(nom_Bufsanstrou))
 print(cmd); system(cmd)
 
+# Intersection avec le masque
 cmd <- paste0(qgis_process, " run native:intersection",
               " --INPUT=",shQuote(nom_Bufsanstrou),
               " --OVERLAY=",nommasque,
@@ -59,10 +59,15 @@ cmd <- paste0(qgis_process, " run native:intersection",
               " --GRID_SIZE=None")
 print(cmd); system(cmd)
 
+Tmp=st_read(nom_BufSatr_Reduit)
+st_write(Tmp[,cbind("BV_ID","AREA_m2","AREA_km2")],nom_BufSatr_Reduit,delete_dsn=F,delete_layer=T,quiet=T)
+
 cmd <- paste0(qgis_process, " run native:intersection",
+              " --distance_units=meters --area_units=m2 --ellipsoid=EPSG:7019",
               " --INPUT=",watershed,
               " --OVERLAY=",nom_BufSatr_Reduit,
               " --OUTPUT=",nomBV_GPKG_Coup,
+              " --OVERLAY_FIELDS_PREFIX=",
               " --GRID_SIZE=None")
 print(cmd); system(cmd)
 

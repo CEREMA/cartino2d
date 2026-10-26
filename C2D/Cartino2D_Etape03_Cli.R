@@ -150,10 +150,89 @@ Etape3_Cli=function()
       # lines(tabMNT[indi[nbLiq],2],tabMNT[indi[nbLiq],3],'type'='p',col='red')
       write.table(tab1, file=nomcli, row.names=FALSE, col.names=FALSE, sep=" ")
       
-      Sortie=st_sf(data.frame(Type="FrontiereSortie",
-                              "geometry" =st_sfc(st_linestring(as.matrix(tabMNT[indi[nbLiq],2:3]),dim="XY"))))
-      st_write(Sortie,file.path(dsnlayerC,"FrontiereSortie.shp"), delete_layer=T, quiet=T)
+      #######################################################################################################
+      # Création de la couche des frontières ouvertes pour une possible ré-utilisation
+      nsaut=unique(c(0,which(nbLiq[-1]-nbLiq[-length(nbLiq)]>1),length(nbLiq)))
+      Sortie_l=lapply(1:(length(nsaut)-1), function(x) {
+        st_sf(data.frame(Type="FrontiereSortie",
+                         "geometry" =st_sfc(st_linestring(as.matrix(tabMNT[indi[nbLiq[(nsaut[x]+1):nsaut[x+1]]],2:3]),dim="XY"),crs=EPSG)
+        ))})
       
+      Sortie=do.call(rbind,Sortie_l)
+      Sortie$LIHBOR=NA_integer_
+      Sortie$LIHBOR = 5
+      Sortie$LIUBOR_LIVBOR = 4
+      Sortie$LITBOR = 4
+      Sortie$Z=as.character(COTE_AVAL)
+      Sortie$Manuel=NA_integer_;Sortie$Manuel=0
+      Sortie$NOM=contour$NOM
+      
+      st_write(Sortie,file.path(dsnlayerC,"FrontiereSortie.shp"), delete_layer=T, quiet=T)
+      # Ancienne méthode
+      # Sortie=st_sf(data.frame(Type="FrontiereSortie",
+      #                         "geometry" =st_sfc(st_linestring(as.matrix(tabMNT[indi[nbLiq],2:3]),dim="XY"))))
+      nomCL_Manuel="FrontiereSortie_Manuel.gpkg"
+      if (file.exists(file.path(dsnlayerC,nomCL_Manuel))==F)
+      {
+        st_write(st_buffer(Sortie,1),file.path(dsnlayerC,nomCL_Manuel), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+      }else{
+        # lecture du fichier
+        CL=st_read(file.path(dsnlayerC,nomCL_Manuel))
+        #S'il y a un changement
+        if (max(CL$Manuel)>0)
+        {
+          plot(tabMNT[tab1[,12],2:3])
+          PtsCL <- st_cast(st_sfc(st_multipoint(x = as.matrix(tabMNT[tab1[,12],2:3]), dim = "XY")), "POINT")
+          st_crs(PtsCL) <- EPSG
+          tab2=tab1
+          
+          
+          tab2[,1:3]=c(2,2,2)
+          tab2$CL=NA
+          
+          for (icl in 1:nrow(CL))
+          {
+            nb=st_intersects(PtsCL,CL[icl,])
+            n_int = which(sapply(nb, length)>0)
+            
+            plot(PtsCL[n_int,])
+            
+            tab2[n_int,1]=CL$LIHBOR[icl]
+            tab2[n_int,2]=CL$LIUBOR_LIVBOR[icl]
+            tab2[n_int,3]=CL$LITBOR[icl]
+            tab2$CL[n_int]=CL$Z[icl]
+            
+          }
+          # Numéro des CL libre
+          nCLlibre=which(!is.na(tab2$CL))
+          
+          SautCL=c(1,which(tab2$CL[nCLlibre[-1]]!=tab2$CL[nCLlibre[-length(nCLlibre)]]),length(nCLlibre))
+          
+          tabliq=c(0,3600,9999999)
+          entete="T"
+          for (InChang in 2:(length(SautCL)))
+          {
+            tabliq=cbind(tabliq,c(min(tab2$CL[nCLlibre[SautCL]]),tab2$CL[nCLlibre[SautCL[InChang]]],tab2$CL[nCLlibre[SautCL[InChang]]]))
+            entete=paste0(entete," SL(",InChang-1,")")
+          }
+          browser()
+          nomCLliq=file.path(dsnlayerC,"CL.liq")
+          write("# Fichier des frontières liquides transitoires", file = nomCLliq)
+          write(paste0("# Généré le ",format(Sys.time(),format="%Y%m%d_%H%M%S")," par Cartino2D"), file = nomCLliq, append=T)
+          write(entete, file = nomCLliq, append=T)
+          write("s m", file = nomCLliq, append=T)
+          write(t(as.matrix(tabliq)), file = nomCLliq, ncolumns = length(SautCL), append=T)
+        }
+        browser()  
+        
+        
+        # PRESCRIBED ELEVATIONS        =1;-9
+        # LIQUID BOUNDARIES FILE = CL.liq
+        # OPTION FOR LIQUID BOUNDARIES =1;1
+        # MAXIMUM NUMBER OF BOUNDARIES=800
+        # lines(tabMNT[indi[nbLiq],2],tabMNT[indi[nbLiq],3],'type'='p',col='red')
+        write.table(tab2, file=nomcli, row.names=FALSE, col.names=FALSE, sep=" ")
+      }
     }else{
       cat("FICHIER ",nomclipputil, " INTROUVABLE\n")
       write.table(0, file=paste0(nomclipputil,"BUGGG"), row.names=FALSE, col.names=FALSE, sep=" ")

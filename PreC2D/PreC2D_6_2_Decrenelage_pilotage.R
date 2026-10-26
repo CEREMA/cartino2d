@@ -10,17 +10,21 @@ source(file.path(chem_routine,"PreC2D","PreC2D_6_2_Decrenelage_job.R"))
 
 # Exemple post C2D 5m
  Reso=2.5
- nomrtovect <- "C:/Cartino2D/France/MAMP2025_5m/C0086_705174km_X883359Y6260813/Post/hyeto_C0086_705174km_X883359Y6260813_SceMaxMedContFrance_00h_00m_12h_00m_HWM_m_ZI0.1.gpkg"
+ raci=file_path_sans_ext(list.files(dsnDPE,"HWH_m.gpkg$"))
+ nomrtovect=file.path(dsnlayerC,"Post",paste0(raci,"_",nomInond,".gpkg"))
+ nomrtovect=file.path(dsnDPE,paste0(raci,"_",nomInond,".gpkg"))
+ 
+ # nomrtovect <- "C:/Cartino2D/France/MAMP2025_5m/C0086_705174km_X883359Y6260813/Post/hyeto_C0086_705174km_X883359Y6260813_SceMaxMedContFrance_00h_00m_12h_00m_HWM_m_ZI0.1.gpkg"
  AireInterieureSupp=300
  AireExterieureSupp=300
- Decrenelage(nomrtovect,AireInterieureSupp,AireExterieureSupp,EPSG,Reso)
+ Decrenelage(nomrtovect,AireInterieureSupp,AireExterieureSupp,EPSG,Reso,qgis_process)
 
 # Exemple post C2D desctructuré
 # Reso=1
 # nomrtovect <- "C:\Cartino2D\France/CNIR/C51_448775km_X908527Y6275414/POST/shyreg_spPB_C51_448775km_X908527Y6275414_T0500_D12_PIC06_HWH_m_ZI0.05.gpkg"
 # AireInterieureSupp=300
 # AireExterieureSupp=300
-# Decrenelage(nomrtovect,AireInterieureSupp,AireExterieureSupp,EPSG,Reso)
+# Decrenelage(nomrtovect,AireInterieureSupp,AireExterieureSupp,EPSG,Reso,qgis_process)
 
 
 

@@ -1,0 +1,114 @@
+# ==============================================================================
+# Cartino2D - .gitignore officiel
+# Permet de travailler et développer sereinement sans polluer le dépôt Git.
+# Ne conserve dans le suivi Git que le code source, les templates et les prérequis.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. PARAMÈTRES UTILISATEUR & SECTEURS PERSONNELS (C2D_ParamUser)
+# ------------------------------------------------------------------------------
+# Ignorer automatiquement tout nouveau secteur ou fichier de paramétrage créé lors des études
+# Fichier de configuration clusters distants (confidentiel - jamais suivi)
+C2D_ParamUser/C2D_CodeCalcuDistant.R
+
+C2D_ParamUser/C2D_00_Secteur_*.R
+C2D_ParamUser/C2D_ParamUtilisateur_*.R
+
+!C2D_ParamUser/C2D_00_Secteur_xxxxxx.R
+!C2D_ParamUser/C2D_00_Secteur_TEMPLATE.R
+!C2D_ParamUser/C2D_ParamUtilisateur_xxxxxx.R
+!C2D_ParamUser/C2D_ParamUtilisateur_TEMPLATE.R
+!C2D_ParamUser/C2D_CodeCalcuDistant_xxxxxx.R
+!C2D_ParamUser/C2D_CodeCalcuDistant_TEMPLATE.R
+!C2D_ParamUser/C2D_LienOutilsPC_xxxxxx.R
+!C2D_ParamUser/C2D_LienOutilsPC_TEMPLATE.R
+!C2D_ParamUser/C2D_LienOutilsPC.R
+!C2D_ParamUser/C2D_00_Secteur_Gardons.R
+!C2D_ParamUser/C2D_ParamUtilisateur_Gardons.R
+!C2D_ParamUser/C2D_00_Secteur_Grabels.R
+!C2D_ParamUser/C2D_ParamUtilisateur_Grabels.R
+!C2D_ParamUser/C2D_00_Secteur_Formation_5m.R
+!C2D_ParamUser/C2D_ParamUtilisateur_Formation_5m.R
+
+# ------------------------------------------------------------------------------
+# 2. FILINO (Verrouillage strict aux 2 fichiers requis pour Cartino2D)
+# ------------------------------------------------------------------------------
+FILINO/*
+!FILINO/filino/
+FILINO/filino/*
+!FILINO/filino/RFILES/
+FILINO/filino/RFILES/*
+!FILINO/filino/RFILES/FILINO_Utils.R
+!FILINO/filino/RFILES/FILINO_02_00c_TablesAssemblagesLazIGN.R
+
+# ------------------------------------------------------------------------------
+# 3. FICHIERS DE CALCULS, SIMULATIONS & RÉSULTATS HYDRAULIQUES
+# ------------------------------------------------------------------------------
+# Résultats Telemac & maillages GMSH
+*.res
+*.slf
+*.msh
+*.geo
+*.pos
+*.cas.bak
+
+# Rasters et données géographiques lourdes générées
+*.asc
+*.tif
+*.tiff
+*.las
+*.laz
+*.xyz
+*.grd
+*.grc
+
+# Formats vecteurs temporaires / couches SIG locales créées
+*.gpkg-shm
+*.gpkg-wal
+*.qix
+*.cpg
+
+# Répertoires de données, calculs et exports
+_Calculs/
+_Resultats/
+_Exports/
+_MNT/
+_Pluie/
+_Strickler/
+_CN/
+_Exzeco/
+_SectionsControles/
+_OuvragesHydrauliques/
+_SIGBase/
+_GRASSDATA/
+grassdata/
+Temp/
+temp/
+
+# ------------------------------------------------------------------------------
+# 4. ENVIRONNEMENT R & RSTUDIO
+# ------------------------------------------------------------------------------
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# ------------------------------------------------------------------------------
+# 5. SAUVEGARDES, LOGS & FICHIERS TEMPORAIRES
+# ------------------------------------------------------------------------------
+*.bak
+*.old
+*~
+*.qgs~
+*.tmp
+*.temp
+*.log
+*.swp
+*.swo
+
+# ------------------------------------------------------------------------------
+# 6. SYSTÈME D'EXPLOITATION
+# ------------------------------------------------------------------------------
+Thumbs.db
+Desktop.ini
+.DS_Store
