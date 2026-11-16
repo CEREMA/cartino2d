@@ -1,0 +1,204 @@
+\documentclass[10pt,a4paper]{article}
+
+% --- Core Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.0cm, top=2.5cm, bottom=2.3cm, headheight=20pt]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+\usepackage{microtype}
+\usepackage[hidelinks, pdftex, colorlinks=true, linkcolor=navyblue, urlcolor=ceremateal, citecolor=navyblue]{hyperref}
+
+% --- Custom Colors ---
+\definecolor{ceremateal}{RGB}{0, 115, 150}
+\definecolor{navyblue}{RGB}{0, 48, 87}
+\definecolor{lightbg}{RGB}{246, 249, 252}
+\definecolor{borderblue}{RGB}{180, 205, 225}
+\definecolor{headergray}{RGB}{235, 242, 248}
+\definecolor{mandatoryred}{RGB}{170, 30, 30}
+\definecolor{optionalgray}{RGB}{100, 105, 110}
+
+% --- Typography & Section Styling ---
+\emergencystretch=1.5em
+
+\titleformat{\section}
+  {\Large\bfseries\color{navyblue}}{\thesection}{1em}{}[\color{ceremateal}\titlerule]
+\titleformat{\subsection}
+  {\large\bfseries\color{ceremateal}}{\thesubsection}{1em}{}
+
+\titlespacing*{\section}{0pt}{1.2em}{0.6em}
+\titlespacing*{\subsection}{0pt}{1.0em}{0.4em}
+
+% --- Header and Footer ---
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{navyblue}\textbf{Cartino2D} – Architecture \& Software Dependencies}
+\fancyhead[R]{\small\color{optionalgray}Cerema Hydraulics \& Hydrodynamics}
+\fancyfoot[C]{\small\color{optionalgray}\thepage}
+\renewcommand{\headrulewidth}{0.6pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{ceremateal}\leaders\hrule height \headrulewidth\hfill}}
+\renewcommand{\footrulewidth}{0pt}
+
+% --- Custom Box for Introduction ---
+\tcbset{
+  orchestratorbox/.style={
+    colback=lightbg,
+    colframe=borderblue,
+    coltitle=navyblue,
+    fonttitle=\bfseries,
+    sharp corners,
+    rounded corners=southeast,
+    arc=4mm,
+    boxrule=0.8pt,
+    left=12pt,
+    right=12pt,
+    top=9pt,
+    bottom=9pt
+  }
+}
+
+\begin{document}
+
+% --- Title Block ---
+\begin{center}
+  {\Huge\bfseries\color{navyblue} Cartino2D}\\[0.3em]
+  {\Large\bfseries\color{ceremateal} Architecture \& Software Dependencies}\\[0.5em]
+  {\small\color{optionalgray} Automated 2D Shallow-Water Hydrodynamic Modeling Framework – Cerema}\\[0.4em]
+  \rule{\textwidth}{1.2pt}
+\end{center}
+
+\vspace{0.4em}
+
+\begin{tcolorbox}[orchestratorbox]
+\textbf{Cartino2D} is an automated framework developed by \textbf{Cerema} to design, execute, and post-process 2D shallow-water hydrodynamic simulations (fluvial flooding, direct pluvial runoff, and marine submersion).
+
+In this architecture, \textbf{R acts as the central driver and orchestrator (the ``pilot'')}. It does not solve the heavy computational fluid dynamics directly; instead, it coordinates a specialized ecosystem of open-source numerical solvers, mesh generators, GIS engines, and high-performance computing (HPC) utilities.
+\end{tcolorbox}
+
+\vspace{0.6em}
+
+\section*{1. Summary of Cartino2D Dependencies}
+\addcontentsline{toc}{section}{1. Summary of Cartino2D Dependencies}
+
+\noindent
+\begin{tabularx}{\textwidth}{>{\bfseries\raggedright\arraybackslash}p{2.6cm} X >{\raggedright\arraybackslash}p{3.2cm} >{\raggedright\arraybackslash}p{2.5cm} >{\centering\arraybackslash}p{2.1cm}}
+\toprule
+\rowcolor{headergray}
+\color{navyblue}Component & \color{navyblue}Core Role & \color{navyblue}Language / Runtime & \color{navyblue}Cartino2D Step & \color{navyblue}Status \\
+\midrule
+R \& RStudio & Master Driver \& Orchestrator & R (4.4+) & All Steps (00--09, PreC2D) & \textbf{\color{mandatoryred}Mandatory} \\
+\addlinespace[3pt]
+TELEMAC-2D & 2D Hydrodynamic numerical solver & Fortran / Python / MPI & Step 05 (Local \& Remote) & \textbf{\color{mandatoryred}Mandatory} \\
+\addlinespace[3pt]
+GMSH & 2D Unstructured finite-element mesher & C++ (64-bit binary) & Step 02 (Mesh generation) & \textbf{\color{mandatoryred}Mandatory} \\
+\addlinespace[3pt]
+PPutils & Selafin \texttt{.slf} creation \& result raster extraction & Python & Steps 01, 02 \& Step 07 & \textbf{\color{mandatoryred}Mandatory} \\
+\addlinespace[3pt]
+Python & Runtime engine for PPutils scripts & Python 3 (\texttt{numpy}, \texttt{scipy}) & Steps 01, 02, 07 & \textbf{\color{mandatoryred}Mandatory} \\
+\addlinespace[3pt]
+GRASS GIS & High-performance raster engine \& culvert repair & GIS CLI (\texttt{grass84.bat}) & Step 01 \& Step 08 & \textbf{\color{mandatoryred}Mandatory} \\
+\addlinespace[3pt]
+QGIS \& OSGeo4W & Headless GIS processing, GDAL utilities, styles \& \texttt{.gpkg} & GIS CLI (\texttt{qgis\_process}) & PreC2D, 00, 01, 02, 07--09 & \textbf{\color{mandatoryred}Mandatory} \\
+\addlinespace[3pt]
+TauDEM & Hydrological terrain analysis (DEM conditioning) & C++ binaries (\texttt{.exe}) / MS-MPI & PreC2D & \textbf{\color{mandatoryred}Mandatory} \\
+\addlinespace[3pt]
+PSCP (PuTTY) & SSH/SCP encrypted bridge to HPC clusters & Windows CLI executable & Step 05 (Remote HPC runs) & \color{optionalgray}Optional (HPC) \\
+\addlinespace[3pt]
+Fortran Routines & Custom user laws (rain, hydrograph interpolation) & Fortran 90 & Steps 04 / 05 & Built-in C2D \\
+\addlinespace[3pt]
+Rtools & C/C++/Fortran Windows compiler toolchain & Windows build tools & R geospatial compilation & \textbf{\color{mandatoryred}Mandatory} \\
+\bottomrule
+\end{tabularx}
+
+\vspace{1.2em}
+
+\section*{2. Detailed Component Descriptions}
+\addcontentsline{toc}{section}{2. Detailed Component Descriptions}
+
+\subsection*{2.1 R \& RStudio — The Master Orchestrator (The Driver)}
+\textbf{R} is the backbone and brain of Cartino2D. Instead of executing heavy computational fluid dynamics directly in R, it acts as an automation framework:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item Reads user-defined spatial extent, grid resolutions, and boundary condition files.
+  \item Automates domain sectorization and generates all intermediate configuration files (\texttt{.cas}, \texttt{.cli}, \texttt{.geo}, \texttt{.bat}) required by downstream software.
+  \item Spawns background system processes and coordinates multicore execution using R packages (\texttt{parallel}, \texttt{future}, \texttt{sf}, \texttt{terra}).
+  \item Manages error logging, workspace initialization, and folder structures.
+\end{itemize}
+
+\subsection*{2.2 TELEMAC-2D \& MS-MPI — The 2D Hydrodynamic Numerical Solver}
+Developed by the Open TELEMAC-MASCARET international consortium, \textbf{TELEMAC-2D} solves the two-dimensional shallow-water Saint-Venant equations on unstructured triangular meshes.
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item Solves water depths ($h$), depth-averaged horizontal velocity fields ($u, v$), bottom friction (Strickler laws), and dynamic infiltration (SCS-CN model).
+  \item \textbf{Natively computes Control Section (SC) balances}: During the simulation, TELEMAC-2D internally integrates water fluxes across user-defined control sections at each time step, outputting instantaneous discharges and cumulative volumes directly into the simulation listings (\texttt{sections\_output.txt} / output listings). R directly parses these text logs in Step 06 to plot interactive hydrographs.
+  \item Simulates river flooding, pluvial surface runoff, and coastal submersion.
+  \item Leverages \textbf{Microsoft MPI (MS-MPI)} under Windows to split meshes across multiple CPU cores for high-speed parallel computation.
+\end{itemize}
+
+\subsection*{2.3 GMSH — 2D Unstructured Finite-Element Mesher}
+\textbf{GMSH} is an open-source 3D/2D finite-element mesh generator with a built-in CAD engine.
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item Cartino2D feeds boundary contours, elevation breaklines (embankments, roads, ditches, valley bottoms), and variable target mesh sizes into GMSH.
+  \item GMSH generates a high-resolution, topography-adaptive Delaunay triangulation (\texttt{.msh}).
+  \item R immediately translates this mesh into the standard TELEMAC binary \textbf{Selafin (\texttt{.slf})} format.
+\end{itemize}
+
+\subsection*{2.4 PPutils \& Python — Mesh Geometry \& Selafin Assembly / Extraction}
+\textbf{PPutils} (\textit{Post-Processing utilities}) is an open-source Python toolchain adapted and enriched by Cerema for hydraulic engineering. It intervenes at multiple key steps of the Cartino2D modeling chain:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item \textbf{Pre-simulation (Steps 01 \& 02 - Selafin Creation)}: Intervenes after GMSH meshing. Using scripts such as \texttt{append\_adcirc\_cerema.py}, it fuses the triangular mesh grids (\texttt{.grd}), interpolated bathymetry/elevation, spatially distributed roughness (Strickler friction), and soil infiltration capacity (Curve Number) into the official binary \textbf{Selafin geometry file (\texttt{.slf})} and boundary conditions file (\texttt{.cli}) required by TELEMAC-2D.
+  \item \textbf{Post-simulation (Step 07 - Mesh-to-Raster Conversion)}: Decodes massive binary TELEMAC-2D mesh simulation results (\texttt{.slf} / \texttt{.res}) and converts peak hydrodynamic envelopes into standard ESRI ASCII raster grids (\texttt{.asc} via \texttt{slf2asc.py}) for water depths (\texttt{HWH}), velocities (\texttt{HV}), unit discharges (\texttt{HSF}), and bathymetry (\texttt{Bottom\_m}).
+\end{itemize}
+\textit{Note: PPutils does not calculate control section discharges; those are computed natively by TELEMAC-2D.}
+
+\subsection*{2.5 GRASS GIS — High-Performance Raster Engine \& Culvert Repair}
+\textbf{GRASS GIS} is invoked in headless command-line mode (\texttt{grass84.bat}). It handles heavy raster operations without the memory overhead of desktop GIS applications:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item \textbf{Spatial masking \& cleaning}: Sets residual water depths to null (\texttt{r.null}) below physical thresholds (e.g., $< 0.005\,\text{m}$).
+  \item \textbf{Hydraulic culvert anti-hole restoration (Anti-trous)}: During meshing, hydraulic structures (bridges, culverts) are often carved into the 1D/2D mesh. In Step 08, GRASS uses map algebra (\texttt{r.mapcalc}) to restore the natural ground elevation (\texttt{MNT\_BRUT\_NAT}) around structures, preventing artificial sinkholes from biasing final inundation maps.
+\end{itemize}
+
+\subsection*{2.6 QGIS \& OSGeo4W (\texttt{qgis\_process}) — Headless Vector/Raster GIS \& Cartography}
+Cartino2D harnesses \textbf{QGIS} (in headless batch mode via \texttt{qgis\_process}) and the \textbf{OSGeo4W} GDAL toolchain across multiple phases of the pipeline, far beyond just post-processing:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item \textbf{PreC2D \& Step 00 (Data Preparation \& Sectorization)}: Executes geometric vector operations (polygon buffering, differences, layer merges, deleting holes via \texttt{native:deleteholes}, and selecting main connected components) as well as raster clipping and format translations.
+  \item \textbf{Step 01 \& Step 02 (Topography \& Mesh Verification)}: Builds virtual elevation mosaics (\texttt{gdalbuildvrt}), generates overviews (\texttt{gdaladdo}), and inspects 2D mesh topology via \texttt{native:exportmeshfaces} before simulation launch.
+  \item \textbf{Steps 07, 08 \& 09 (Post-Processing \& Delivery)}: Performs mesh rasterization (\texttt{native:meshrasterize}), reprojections (\texttt{gdal:warpreproject}), crops rasters to validated zones, automatically injects official Cerema symbology templates (\texttt{.qml}), and packages multi-scenario outputs into compressed \textbf{OGC GeoPackage (\texttt{.gpkg})} databases with built-in pyramids.
+\end{itemize}
+
+\subsection*{2.7 TauDEM — Hydrological Terrain Conditioning (PreC2D)}
+\textbf{TauDEM} (\textit{Terrain Analysis Using Digital Elevation Models}) is a \textbf{mandatory} suite of compiled standalone C++ command-line executables (\texttt{.exe}) developed by Utah State University. It runs in parallel via \textbf{Microsoft MPI (\texttt{mpiexec})} and does \textbf{not} rely on Python:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item Removes artificial terrain depressions and sinks from raw LiDAR/DEM data (\texttt{PitRemove.exe}).
+  \item Computes flow directions (\texttt{D8Flowdir.exe} and \texttt{DinfFlowDir.exe}) and contributing drainage areas (\texttt{AreaD8.exe}).
+  \item Delineates sub-catchments and stream networks to guide the placement of rainfall and liquid boundary sources.
+\end{itemize}
+
+\subsection*{2.8 PSCP (PuTTY) — Encrypted Supercomputing Bridge (HPC)}
+For massive regional or national simulations that exceed the capacity of local desktop workstations, \textbf{\texttt{pscp.exe}} provides an automated, secure SCP transfer pipeline:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item Uploads geometry meshes (\texttt{.slf}), steering files (\texttt{.cas}), and boundary condition files (\texttt{.cli}) to remote high-performance supercomputers (e.g., IFREMER Datarmor, CEA TGCC Irene, DTecRem Margny).
+  \item Synchronizes and downloads result files (\texttt{.res}, \texttt{.slf}) back to the local workstation once Slurm batch jobs complete.
+\end{itemize}
+
+\subsection*{2.9 Dynamic Fortran Routines (\texttt{.f}) — Advanced Hydraulic Laws}
+Located in Cartino2D subfolders, custom Fortran 90 routines are compiled on the fly by TELEMAC at run launch:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item \texttt{discharge\_interpol.f}: Performs dynamic temporal linear interpolation of discharge hydrographs injected at inflow boundaries and liquid sources.
+  \item Spatially and temporally distributes radar rainfall matrices and soil infiltration laws across mesh nodes.
+\end{itemize}
+
+\subsection*{2.10 Rtools — Windows Native Build Toolchain}
+\textbf{Rtools} provides the GCC, Gfortran, and C++ compilers required on Windows:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item Allows R to compile native C/C++ dependencies behind core geospatial packages (\texttt{sf}, \texttt{terra}, \texttt{units}, \texttt{gdalraster}).
+  \item Ensures binary compatibility and high-performance execution of geospatial algebra in R.
+\end{itemize}
+
+\end{document}

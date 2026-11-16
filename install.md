@@ -44,7 +44,7 @@ Avant de commencer, assurez-vous :
 ---
 
 ### 5. Installation de TauDEM
-- Téléchargez **TauDEM** (version complète) depuis : [https://hydrology.usu.edu/taudem/taudem5/downloads.html](https://hydrology.usu.edu/taudem/taudem5/downloads.html)
+- Téléchargez **TauDEM** (version complète) depuis : [https://hydrology.usu.edu/taudem/taudem5/downloads.html](https://github.com/dtarb/TauDEM/releases/download/v5.3.7/TauDEM537_setup.exe)
 - Installez-le dans le répertoire suivant :
   **Chemin d’installation** : `C:\TauDEM`
 - Lors de l’installation, choisissez l’option :
@@ -53,7 +53,7 @@ Avant de commencer, assurez-vous :
 
 ---
 
-### 6. Téléchargement de pscp.exe
+### 6. Téléchargement de pscp.exe ( pas obligatoire )
 - Téléchargez **pscp.exe** depuis : [https://the.earth.li/~sgtatham/putty/latest/w64/pscp.exe](https://the.earth.li/~sgtatham/putty/latest/w64/pscp.exe)
 - Copiez le fichier dans :
   **Chemin de destination** : `C:\Cartino2D`
@@ -95,7 +95,7 @@ Avant de commencer, assurez-vous :
 ---
 
 ### 9. Installation de Telemac v8p4r0
-- Téléchargez **Telemac v8p4r0** depuis : [http://www.opentelemac.org/](http://www.opentelemac.org/)
+- Téléchargez **Telemac v8p4r0** depuis : [https://open-simulation-center.org](https://open-simulation-center.org/downloads/opentelemac/openTELEMAC/v8p4)
 - Installez-le, par exemple, dans le répertoire : `C:\TELEMAC\V8P4`
 - Mettez à jour **MPI** en téléchargeant et en exécutant `msmpisetup.exe` depuis : [https://www.microsoft.com/en-us/download/details.aspx?id=105289](https://www.microsoft.com/en-us/download/details.aspx?id=105289)
   *(Cochez `msmpisetup.exe`)*
