@@ -554,19 +554,42 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
       }  
       
       # Gestion de la submersion marine
-      contour$SubMarine= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
-      if (!is.null(contour$SubMarine))
+      # contour$SubMar= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
+      if (!is.null(contour$SubMar))
       {
         dsnSubMar="H:/Cartino2D_SM/France/_SubMarine"
         listSM=list.files(file.path(dsnSubMar,contour$NOMPOST),"SubMar.liq")
-        if (length(listSM)>0)
+        listCL=file.path(dsnlayerC,"CL.liq")
+        browser()
+        if (length(listSM)>0 & file.exists(listCL)==T)
         {
+          tabCL =read.table(listCL,skip=4)
+          tabliq=read.table(file.path(dsnSubMar,contour$NOMPOST,listSM[1]),skip=4)
+          
+          entete="T"
+            
+          if (ncol(tabCL)>2)
+          {
+            for (icol in 2:ncol(tabCL))
+            {
+              entete=paste0(entete," SL(",icol-1,")")
+              if (icol>2){tabliq[,icol]=tabliq[,2]}
+            }
+          }
+          
+          nomCLliq=file.path(dsnlayerC,listSM[1])
+          write("# Fichier des frontières liquides transitoires", file = nomCLliq)
+          write(paste0("# Généré le ",format(Sys.time(),format="%Y%m%d_%H%M%S")," par Cartino2D"), file = nomCLliq, append=T)
+          write(entete, file = nomCLliq, append=T)
+          write("s m", file = nomCLliq, append=T)
+          write(t(as.matrix(tabliq)), file = nomCLliq, ncolumns = ncol(tabliq), append=T)
+          
           lg=length(Lignes)
           Lignes[lg+1]="/---------------------------------------------------------------------"
           Lignes[lg+2]=paste0("LIQUID BOUNDARIES FILE = ",listSM[1])
           Lignes[lg+3]="/---------------------------------------------------------------------"
           
-          file.copy(file.path(dsnSubMar,contour$NOMPOST,listSM[1]),file.path(dsnlayerC,listSM[1]))
+          # file.copy(file.path(dsnSubMar,contour$NOMPOST,listSM[1]),file.path(dsnlayerC,listSM[1]))
         }
       }
       

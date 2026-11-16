@@ -113,10 +113,10 @@ Etape1_Contour = function(dsnlayer, contour, crs)
   }
   
   # gestion de la submersion marine
-  # contour$SubMarine= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
-  if (!is.null(contour$SubMarine))
+  # contour$SubMar= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
+  if (!is.null(contour$SubMar))
   {
-    Zone_SM=st_read(contour$SubMarine)
+    Zone_SM=st_read(contour$SubMar)
     contour_sm=st_cast(st_intersection(contour_segm_fin,Zone_SM),"POLYGON")
     contour_sm=sfheaders::sf_remove_holes(contour_sm)
     Aire=st_area(contour_sm)

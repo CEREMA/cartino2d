@@ -184,8 +184,8 @@ Etape3_Cli=function()
         CL=st_read(nomCL_Manuel)
         
         # gestion de la submersion marine
-        # contour$SubMarine= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
-        if (!is.null(contour$SubMarine))
+        # contour$SubMar= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
+        if (!is.null(contour$SubMar))
         {
           # Ajout de la submersion marine
           nomBufMer="H:/FILINO_Travail/00_SIGBase/DEPARTEMENT_Buf_pour_mer.shp"
@@ -193,11 +193,12 @@ Etape3_Cli=function()
           
           CL=st_difference(CL,MerCL)
           CL$Manuel=1
-          CL$Z=2
+          CL$Z=1:nrow(CL)
           st_write(CL,nomCL_Manuel, driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
           # Faire un nouveau Liq
         }
         
+
         #S'il y a un changement
         if (max(CL$Manuel)>0)
         {
@@ -205,7 +206,6 @@ Etape3_Cli=function()
           PtsCL <- st_cast(st_sfc(st_multipoint(x = as.matrix(tabMNT[tab1[,12],2:3]), dim = "XY")), "POINT")
           st_crs(PtsCL) <- EPSG
           tab2=tab1
-          
           
           tab2[,1:3]=c(2,2,2)
           tab2$CL=NA
@@ -242,7 +242,7 @@ Etape3_Cli=function()
           write("s m", file = nomCLliq, append=T)
           write(t(as.matrix(tabliq)), file = nomCLliq, ncolumns = length(SautCL), append=T)
         }
-
+        
         # PRESCRIBED ELEVATIONS        =1;-9
         # LIQUID BOUNDARIES FILE = CL.liq
         # OPTION FOR LIQUID BOUNDARIES =1;1
