@@ -6,7 +6,7 @@ Etape9_PostTelemacPPutils=function()
 {
   # choix= 1 # pputils
   choix= 2 # qgis
-
+browser()
   listeRES=list.files(dsnlayerC,pattern=".res$")
   
   toremove <- (grepl(pattern = "WD",x =listeRES) & grepl(pattern = ".res",x =listeRES)) | (grepl(pattern = "SFR",x =listeRES) & grepl(pattern = ".res",x =listeRES))

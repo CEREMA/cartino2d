@@ -108,12 +108,14 @@ for (izs in nlal)
   
   # Formatage des noms ------------------------------------------------
   colnames(NOM) = "NOM"
+  if (exists("SubMar")==F){SubMar=""}
   TabParam = cbind(
     ID,
     STEP_PRE,
     NOM,
     COMMENT,
     Exzeco,
+    SubMar,
     SourceDeb,
     NOMPOST,
     MNT,
@@ -153,7 +155,7 @@ for (izs in nlal)
   # print("VOIR FRED PONS - MODIF")
   
   pgb <- txtProgressBar(min = 0, max = nrow(Beau),style=3)
-
+  
   PlusMoins=c(2,-5)  
   PlusMoins=c(120,-360)
   for (incB in 1:nrow(Beau))
@@ -171,7 +173,7 @@ for (izs in nlal)
   st_write(Beau,nomsansrivieres, delete_layer = T, quiet = T)
   
   nomBeau=file.path(dsnlayer, nom_exp)
-  AireMin=200*200
+  AireMin=100*100
   
   # Enlever les petits trous
   cmd <- paste0(qgis_process, " run native:deleteholes",
@@ -181,6 +183,13 @@ for (izs in nlal)
   print(cmd); system(cmd)
   
   Beau=st_read(nomBeau)
+  
+  vides <- which(st_is_empty(Beau$geom)==T)
+  if (length(vides)>0)
+  {
+    Beau=Beau[-vides,]
+    st_write(Beau,nomBeau, delete_dsn = T,delete_layer = T, quiet = T)
+  }
   
   unlink(nomsansrivieres)
   

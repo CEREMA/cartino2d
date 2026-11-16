@@ -9,7 +9,7 @@ Etape3_Cli=function()
   NomSlf <- file.path(dsnlayerC,paste0(nom_Telemac,".slf"))
   
   cat(NomSlf,"\n")
-  if(file.exists(NomSlf)) 
+  if(file.exists(NomSlf))
   {
     mntgrd <- file.path(dsnlayerC,paste0(nom_maillage,"_",nom_MNT,".grd"))
     
@@ -171,13 +171,33 @@ Etape3_Cli=function()
       # Ancienne méthode
       # Sortie=st_sf(data.frame(Type="FrontiereSortie",
       #                         "geometry" =st_sfc(st_linestring(as.matrix(tabMNT[indi[nbLiq],2:3]),dim="XY"))))
-      nomCL_Manuel="FrontiereSortie_Manuel.gpkg"
-      if (file.exists(file.path(dsnlayerC,nomCL_Manuel))==F)
+      nomCL_Manuel=file.path(dsnlayerC,"FrontiereSortie_Manuel.gpkg")
+      # Export du fichier Manuel
+      if (file.exists(nomCL_Manuel)==F)
       {
-        st_write(st_buffer(Sortie,1),file.path(dsnlayerC,nomCL_Manuel), driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
-      }else{
+        st_write(st_buffer(Sortie,1),nomCL_Manuel, driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+      }
+      
+      if (file.exists(nomCL_Manuel)==T)
+      {
         # lecture du fichier
-        CL=st_read(file.path(dsnlayerC,nomCL_Manuel))
+        CL=st_read(nomCL_Manuel)
+        
+        # gestion de la submersion marine
+        # contour$SubMarine= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
+        if (!is.null(contour$SubMarine))
+        {
+          # Ajout de la submersion marine
+          nomBufMer="H:/FILINO_Travail/00_SIGBase/DEPARTEMENT_Buf_pour_mer.shp"
+          MerCL=st_read(nomBufMer)
+          
+          CL=st_difference(CL,MerCL)
+          CL$Manuel=1
+          CL$Z=2
+          st_write(CL,nomCL_Manuel, driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+          # Faire un nouveau Liq
+        }
+        
         #S'il y a un changement
         if (max(CL$Manuel)>0)
         {
@@ -212,10 +232,9 @@ Etape3_Cli=function()
           entete="T"
           for (InChang in 2:(length(SautCL)))
           {
-            tabliq=cbind(tabliq,c(min(tab2$CL[nCLlibre[SautCL]]),tab2$CL[nCLlibre[SautCL[InChang]]],tab2$CL[nCLlibre[SautCL[InChang]]]))
+            tabliq=cbind(tabliq,c(min(tab2$CL[nCLlibre[SautCL]],COTE_AVAL),tab2$CL[nCLlibre[SautCL[InChang]]],tab2$CL[nCLlibre[SautCL[InChang]]]))
             entete=paste0(entete," SL(",InChang-1,")")
           }
-          browser()
           nomCLliq=file.path(dsnlayerC,"CL.liq")
           write("# Fichier des frontières liquides transitoires", file = nomCLliq)
           write(paste0("# Généré le ",format(Sys.time(),format="%Y%m%d_%H%M%S")," par Cartino2D"), file = nomCLliq, append=T)
@@ -223,9 +242,7 @@ Etape3_Cli=function()
           write("s m", file = nomCLliq, append=T)
           write(t(as.matrix(tabliq)), file = nomCLliq, ncolumns = length(SautCL), append=T)
         }
-        browser()  
-        
-        
+
         # PRESCRIBED ELEVATIONS        =1;-9
         # LIQUID BOUNDARIES FILE = CL.liq
         # OPTION FOR LIQUID BOUNDARIES =1;1

@@ -1919,6 +1919,7 @@ batchfileparallel <- function()
   # cas_files <- cas_files[which(cas_files!="Cartino2D.cas")]
 
   res_cas_files <- detect_res_files(dsnlayerC)
+  # browser()
   res_files <- res_cas_files[[1]]
   res_exists_ <- file.exists(res_files)
   cas_files <- res_cas_files[[2]]

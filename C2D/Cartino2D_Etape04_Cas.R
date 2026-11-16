@@ -4,13 +4,14 @@
 
 Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
 {
+  # Il faudrait gérer la vérif de dsnpluie
   NomUnivar=file.path(dsnlayerC,"univar.txt")
   if (file.exists(NomUnivar)==T){
     COTE_AVAL=max(contour$COTEAVALM,contour$COTEAVALAJ+as.numeric(scan(file=NomUnivar,NomUnivar,sep=":",skip=6,nlines=1,dec="."))[2])
   }else{
     COTE_AVAL=contour$COTEAVALM
   }
-
+  
   Lignes=readLines(con=file.path(dsnlayerC,nom_Cas))
   
   TelFred=file.path(dsnlayerC,"TelemacFred.txt")
@@ -252,7 +253,7 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
         DebutT=0
         
         duretevt=name_split[6]
-
+        
         strsplit(duretevt,"h")[[1]][1]
         substr(strsplit(duretevt,"h")[[1]][2],1,2)
         # DUREE=as.numeric(substr(name_split[6],1,2))+as.numeric(substr(name_split[6],4,5))/60
@@ -552,6 +553,23 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
         Lignes[which(indic>-1)]=paste0(Changement[ic,2],Changement[ic,3])
       }  
       
+      # Gestion de la submersion marine
+      contour$SubMarine= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
+      if (!is.null(contour$SubMarine))
+      {
+        dsnSubMar="H:/Cartino2D_SM/France/_SubMarine"
+        listSM=list.files(file.path(dsnSubMar,contour$NOMPOST),"SubMar.liq")
+        if (length(listSM)>0)
+        {
+          lg=length(Lignes)
+          Lignes[lg+1]="/---------------------------------------------------------------------"
+          Lignes[lg+2]=paste0("LIQUID BOUNDARIES FILE = ",listSM[1])
+          Lignes[lg+3]="/---------------------------------------------------------------------"
+          
+          file.copy(file.path(dsnSubMar,contour$NOMPOST,listSM[1]),file.path(dsnlayerC,listSM[1]))
+        }
+      }
+      
       # Gestion des ouvrages
       if (file.exists(file.path(dsnlayerC,"OuvHydrau_Select.txt"))==TRUE)
       {
@@ -583,13 +601,13 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
           Lignes[lg+8]='TURBULENCE MODEL     =1'
           Lignes[lg+9]='VELOCITY DIFFUSIVITY =1.E-2'
         }
-
-
+        
+        
       }
-
+      
       # Gestion des sections de controle
       Gestion_Sections_Controle(dsnlayer,dsnlayerC,contour,0)
-
+      
       if (file.exists(file.path(dsnlayerC,"SectControl_Select.shp"))==TRUE)
       {
         SectControl=st_read(dsn = dsnlayerC,
@@ -820,7 +838,7 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
               ficiLF=read.table(file.path(cheminsourcedebit,Lien_Fichier[iLF,1]),header=T)
               print(Lien_Fichier[iLF,1])
               print(dim(ficiLF))
-
+              
               if (iLF==1)
               {
                 DSour=ficiLF
@@ -1087,8 +1105,8 @@ Etape4_fn <- function(){
       name_cas_all <- c()
       if(abaques==TRUE){
         if(file.exists(file.path(dsnlayerC,"OuvHydrau_Select.txt"))){
-        source(file.path(chem_routine,"C2D","Cartino2D_Etape04_abaques.R"))
-        abacus()
+          source(file.path(chem_routine,"C2D","Cartino2D_Etape04_abaques.R"))
+          abacus()
         }
       }
       cas_name_ <- Etape4_Cas_Hyeto(dsnlayerC, nom_Cas, dsnPluie, contour)
@@ -1120,7 +1138,7 @@ Etape4_fn_parallel <- function(){
     
     writeLines(name_cas_all,file.path(dsnlayerC,"casfiles.txt"))
     if(OH_verif==TRUE){
-
+      
       verifhaut()
       
     }

@@ -112,6 +112,26 @@ Etape1_Contour = function(dsnlayer, contour, crs)
     }
   }
   
+  # gestion de la submersion marine
+  # contour$SubMarine= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
+  if (!is.null(contour$SubMarine))
+  {
+    Zone_SM=st_read(contour$SubMarine)
+    contour_sm=st_cast(st_intersection(contour_segm_fin,Zone_SM),"POLYGON")
+    contour_sm=sfheaders::sf_remove_holes(contour_sm)
+    Aire=st_area(contour_sm)
+    contour_sm=contour_sm[which.max(Aire),]
+    
+    st_write(
+      contour_sm,
+      dsn = file.path(dsnlayerC, paste0(nom_STEP1_Contour, ".shp")),
+      layer = nom_STEP2_Zone_Valid_Calcul,
+      delete_dsn=T,
+      delete_layer = T,
+      quiet = T
+    )
+  }
+  
   st_write(
     contour_int,
     dsn = file.path(dsnlayerC, paste0(nom_STEP2_Zone_Valid_Calcul, ".shp")),
@@ -130,7 +150,6 @@ Etape1_Contour = function(dsnlayer, contour, crs)
 ########################################################################################·
 Etape1_GrandContourBordDecoupe=function(GrandContour,Cont1Buf,Reso)
 {
-  
   if (is.na(as.numeric(contour$Exzeco))==T)
   {  
     Contoursanstrou <- GrandContour %>% 
@@ -1362,7 +1381,7 @@ Etape1_CNFriction = function(NomParamH,
   NomParamH_patch=paste0(NomParamH,"Patch")
   cmd=paste0("r.patch --quiet --overwrite ","input=",NomParamH_,",",NomParamH_Vide," output=",NomParamH_patch," nprocs=",NProcGrass)
   print(cmd);system(paste0(BatGRASS," ",SecteurGRASS," --exec ",cmd))
-
+  
   
   nomcsv = paste0(dsnlayerC, "/", NomParamH, ".csv")
   # cmd = paste0("r.out.xyz --quiet --overwrite input=", NomParamH_patch, " output=", nomcsv, " separator=comma")

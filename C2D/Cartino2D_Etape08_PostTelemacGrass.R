@@ -25,10 +25,10 @@ Etape10_PostTelemacGrass=function()
         # toto=system(paste0(BatGRASS," -c EPSG:",EPSG," ",dirname(SecteurGRASS)," --text"))
         # if (toto!=0){cat("Vous avez un problème dans ",BatGRASS,"\n");BUGDEGRASS=BOOM}
         # system(paste0(BatGRASS," -c ",SecteurGRASS," --text"))
-        
+        browser()
         # Creation propre d'un monde GRASS à 3 niveaux : GISDBASE / LOCATION / MAPSET
         loc_name = paste0("Post_", basename(dsnlayerC), "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-        SecteurGRASS = file.path(SecteurGRASS_, loc_name, "PERMANENT")
+        SecteurGRASS = file.path(dirname(dirname(SecteurGRASS_)), loc_name, "PERMANENT")
         loc_path = dirname(SecteurGRASS)
         
         # Nettoyage préalable puis création avec projection EPSG (-e pour sortie propre)
@@ -43,7 +43,7 @@ Etape10_PostTelemacGrass=function()
         
         # S'assurer que Bottom_m est présent si le GPKG existe déjà (copié par Etape 7)
         if (file.exists(file.path(dsnlayerC_, paste0(nomres, "_Bottom_m.gpkg"))) && !("Bottom_m" %in% extsortieASC)) {
-            extsortieASC = c(extsortieASC, "Bottom_m")
+          extsortieASC = c(extsortieASC, "Bottom_m")
         }
         
         # Placer Bottom_m en premier pour qu'il soit corrigé avant les calculs dérivés
