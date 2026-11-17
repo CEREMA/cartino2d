@@ -511,6 +511,60 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
         # FormattedDataFile="FORMATTED DATA FILE 2 ="
       }
       
+      # Gestion des conditions limites
+      listCL=file.path(dsnlayerC,"CL.liq")
+      CLafaire=0
+      if (file.exists(listCL)==T)
+      {
+        CLafaire=1
+        tabCL =read.table(listCL,skip=4)
+        COTE_AVAL=min(tabCL[1,2:ncol(tabCL)])
+        nomLIqexp=basename(listCL)
+        # Gestion de la submersion marine
+        # contour$SubMar= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
+        if (!is.null(contour$SubMar))
+        {
+          dsnSubMar="H:/Cartino2D_SM/France/_SubMarine"
+          listSM=list.files(file.path(dsnSubMar,contour$NOMPOST),"SubMar.liq")
+          
+          if (length(listSM)>0)
+          {
+            tabliq=read.table(file.path(dsnSubMar,contour$NOMPOST,listSM[1]),skip=4)
+            COTE_AVAL=min(tabliq[1,2:ncol(tabliq)])
+            entete="T"
+            
+            if (ncol(tabCL)>2)
+            {
+              for (icol in 2:ncol(tabCL))
+              {
+                entete=paste0(entete," SL(",icol-1,")")
+                if (icol>2){tabliq[,icol]=tabliq[,2]}
+              }
+            }
+            
+            nomCLliq=file.path(dsnlayerC,listSM[1])
+            write("# Fichier des frontières liquides transitoires", file = nomCLliq)
+            write(paste0("# Généré le ",format(Sys.time(),format="%Y%m%d_%H%M%S")," par Cartino2D"), file = nomCLliq, append=T)
+            write(entete, file = nomCLliq, append=T)
+            write("s m", file = nomCLliq, append=T)
+            write(t(as.matrix(tabliq)), file = nomCLliq, ncolumns = ncol(tabliq), append=T)
+            
+            nomLIqexp=basename(nomCLliq)
+            # file.copy(file.path(dsnSubMar,contour$NOMPOST,listSM[1]),file.path(dsnlayerC,listSM[1]))
+          }
+        }
+      }
+      
+      # Ajout de conditions limites non constantes
+      if (CLafaire==1)
+      {
+        lg=length(Lignes)
+        Lignes[lg+1]="/---------------------------------------------------------------------"
+        Lignes[lg+2]=paste0("LIQUID BOUNDARIES FILE = ",nomLIqexp)
+        Lignes[lg+3]="/---------------------------------------------------------------------"
+      }
+      
+      
       Changement=rbind(cbind("GEOMETRY FILE","GEOMETRY FILE            =",NOMSLF),
                        cbind("FORMATTED DATA FILE 1 =",FormattedDataFile,hyeto_nom),
                        cbind("FRICTION COEFFICIENT","FRICTION COEFFICIENT   =",Strickler),
@@ -553,44 +607,13 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
         Lignes[which(indic>-1)]=paste0(Changement[ic,2],Changement[ic,3])
       }  
       
-      # Gestion de la submersion marine
-      # contour$SubMar= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
-      if (!is.null(contour$SubMar))
+      # Ajout de conditions limites non constantes
+      if (CLafaire==1)
       {
-        dsnSubMar="H:/Cartino2D_SM/France/_SubMarine"
-        listSM=list.files(file.path(dsnSubMar,contour$NOMPOST),"SubMar.liq")
-        listCL=file.path(dsnlayerC,"CL.liq")
-        browser()
-        if (length(listSM)>0 & file.exists(listCL)==T)
-        {
-          tabCL =read.table(listCL,skip=4)
-          tabliq=read.table(file.path(dsnSubMar,contour$NOMPOST,listSM[1]),skip=4)
-          
-          entete="T"
-            
-          if (ncol(tabCL)>2)
-          {
-            for (icol in 2:ncol(tabCL))
-            {
-              entete=paste0(entete," SL(",icol-1,")")
-              if (icol>2){tabliq[,icol]=tabliq[,2]}
-            }
-          }
-          
-          nomCLliq=file.path(dsnlayerC,listSM[1])
-          write("# Fichier des frontières liquides transitoires", file = nomCLliq)
-          write(paste0("# Généré le ",format(Sys.time(),format="%Y%m%d_%H%M%S")," par Cartino2D"), file = nomCLliq, append=T)
-          write(entete, file = nomCLliq, append=T)
-          write("s m", file = nomCLliq, append=T)
-          write(t(as.matrix(tabliq)), file = nomCLliq, ncolumns = ncol(tabliq), append=T)
-          
-          lg=length(Lignes)
-          Lignes[lg+1]="/---------------------------------------------------------------------"
-          Lignes[lg+2]=paste0("LIQUID BOUNDARIES FILE = ",listSM[1])
-          Lignes[lg+3]="/---------------------------------------------------------------------"
-          
-          # file.copy(file.path(dsnSubMar,contour$NOMPOST,listSM[1]),file.path(dsnlayerC,listSM[1]))
-        }
+        lg=length(Lignes)
+        Lignes[lg+1]="/---------------------------------------------------------------------"
+        Lignes[lg+2]=paste0("LIQUID BOUNDARIES FILE = ",nomLIqexp)
+        Lignes[lg+3]="/---------------------------------------------------------------------"
       }
       
       # Gestion des ouvrages
