@@ -1860,6 +1860,29 @@ download_results_tgcc <- function(){
 #############################Exécution de telemac 2D en séquentiel ou en parallèle############################################################
 #############################valable sur machines personnelles windows########################################################################
 
+build_telemac_env_lines <- function(t_folder)
+{
+  t_win <- gsub("/", "\\\\", t_folder)
+  if (file.exists(file.path(t_folder, "env_openTELEMAC.bat"))) {
+    ext_bins <- list.dirs(file.path(t_folder, "external"), recursive = FALSE, full.names = TRUE)
+    ext_bins <- file.path(ext_bins, "bin")
+    ext_bins <- ext_bins[dir.exists(ext_bins)]
+    ext_bins_win <- paste(gsub("/", "\\\\", ext_bins), collapse = ";")
+    py_dirs <- list.dirs(file.path(t_folder, "external"), recursive = FALSE, full.names = TRUE)
+    py_dir <- py_dirs[grepl("python", basename(py_dirs), ignore.case = TRUE)][1]
+    py_win <- if (!is.na(py_dir)) gsub("/", "\\\\", py_dir) else paste0(t_win, "\\external\\python-3.12.10")
+    return(c(
+      paste0("SET HOMETEL=", t_win),
+      paste0("SET SYSTELCFG=", t_win, "\\systel.cfg"),
+      paste0("SET PYTHONHOME=", py_win),
+      paste0("SET PYTHONPATH=", t_win, "\\scripts\\python3"),
+      paste0("SET PATH=", t_win, "\\scripts;", t_win, "\\scripts\\python3;", py_win, ";", py_win, "\\Scripts;", ext_bins_win, ";", t_win, "\\bin;%PATH%")
+    ))
+  } else {
+    return(paste0("CALL ", t_win, "\\configs\\pysource.bat"))
+  }
+}
+
 batchfilescalar <- function()
 {
   
@@ -1868,19 +1891,8 @@ batchfilescalar <- function()
   file.copy(from = templatepath,to = batfile,overwrite = TRUE)
   
   x = readLines(batfile)
-  
-  
-  tu1 = gsub("telemacpath",as.character(gsub(r"(\\)",r"(\\\\\\)",telemac_folder)),x[1])
-  # tu2 = gsub("cfgname",as.character(cfgscalar),x[3])
-  # tu3 = gsub("telemac2d.py_path",as.character(gsub(r"(\\)",r"(\\\\\\)",telemac2d)),x[5])
-  # tu4 = gsub("projectpath",as.character(gsub(r"(\\)",r"(\\\\\\)",dsnlayerC)),x[6])
-  
-  
-  x[1]=tu1
-  # x[3]=tu2
-  # x[5]=tu3
-  # x[6]=tu4
-  
+  env_lines <- build_telemac_env_lines(telemac_folder)
+  x <- c(env_lines, x[-1])
   
   writeLines(x,batfile,sep = "\n")
   
@@ -1901,17 +1913,8 @@ batchfileparallel <- function()
   file.copy(from = templatepath,to = batfile,overwrite = TRUE)
   
   x = readLines(batfile)
-  
-  tu1 = gsub("telemacpath",as.character(gsub(r"(\\)",r"(\\\\\\)",telemac_folder)),x[1])
-  # tu2 = gsub("cfgname",as.character(cfgparallel),x[3])
-  # tu3 = gsub("telemac2d.py_path",as.character(gsub(r"(\\)",r"(\\\\\\)",telemac2d)),x[5])
-  # tu4 = gsub("projectpath",as.character(gsub(r"(\\)",r"(\\\\\\)",dsnlayerC)),x[6])
-  
-  x[1]=tu1
-  # x[3]=tu2
-  # x[5]=tu3
-  # x[6]=tu4
-  
+  env_lines <- build_telemac_env_lines(telemac_folder)
+  x <- c(env_lines, x[-1])
   
   writeLines(x,batfile,sep = "\n")
   #### NH VOIR POUR NE LANCER QUE CEUX QUI N EXISTENT PAS

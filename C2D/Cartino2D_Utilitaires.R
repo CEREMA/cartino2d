@@ -334,29 +334,54 @@ GardeNvxPointsLoinPointsInitiaux = function(NewPoints, IniPoint, Ratio, Dist)
 # copie des bons fichiers fortran
 # si pluie spatialisée raindef=4
 
+# Helper de détection de TELEMAC v9.1 à partir du chemin telemac_folder dans C2D_LienOutilsPC.R
+is_telemac_v91 = function()
+{
+  if (exists("telemac_folder", envir = .GlobalEnv)) {
+    f <- as.character(get("telemac_folder", envir = .GlobalEnv))
+    if (grepl("9\\.1|v91|v9p1|9\\.1\\.0", f, ignore.case = TRUE)) return(TRUE)
+  }
+  return(FALSE)
+}
+
 copie_prerequis = function()
 {
   if (file.exists(dsnlayerC)==F){dir.create(dsnlayerC, recursive = T)}
   qmlcasqgz = list.files(file.path(chem_routine,"C2D",Doss_Base), recursive = F)
   nici=grep(qmlcasqgz,pattern="USER_FORTRA")
   if (length(nici)>0){qmlcasqgz=qmlcasqgz[-nici]}
+  nici_ver=grep(qmlcasqgz,pattern="^(v91|V8P2|TGCC)$", ignore.case = TRUE)
+  if (length(nici_ver)>0){qmlcasqgz=qmlcasqgz[-nici_ver]}
   file.copy(file.path(chem_routine,"C2D",Doss_Base, qmlcasqgz),
             file.path(dsnlayerC, qmlcasqgz))
   
+  is_v91 <- is_telemac_v91()
+  
   for (USER_FORTRAN in c("USER_FORTRAN_PH","USER_FORTRAN_PS"))
   {
-    if (file.exists(file.path(dsnlayerC,USER_FORTRAN))==F){dir.create(file.path(dsnlayerC,USER_FORTRAN))}
+    if (file.exists(file.path(dsnlayerC,USER_FORTRAN))==F){dir.create(file.path(dsnlayerC,USER_FORTRAN), recursive = TRUE)}
     
-    qmlcasqgz = list.files(file.path(chem_routine,"C2D",Doss_Base, USER_FORTRAN))
+    # Choix du dossier source : v91 si activé et existant, sinon dossier par défaut
+    dir_fortran_src <- file.path(chem_routine, "C2D", Doss_Base, USER_FORTRAN)
+    if (is_v91) {
+      dir_v91_cand <- file.path(chem_routine, "C2D", Doss_Base, "v91", USER_FORTRAN)
+      if (dir.exists(dir_v91_cand)) {
+        dir_fortran_src <- dir_v91_cand
+        cat("--> TELEMAC v9.1 actif : copie des User Fortran depuis", dir_v91_cand, "\n")
+      } else {
+        cat("--> TELEMAC v9.1 actif mais", dir_v91_cand, "introuvable : utilisation du dossier par défaut\n")
+      }
+    }
+    
+    qmlcasqgz = list.files(dir_fortran_src)
     
     if(is.na(contour$OH)){
       qmlcasqgz <- qmlcasqgz[-which(qmlcasqgz=="buse.f" | qmlcasqgz=="debsce.f" )]
-      
     }
     file.copy(
-      file.path(chem_routine,"C2D",Doss_Base, USER_FORTRAN, qmlcasqgz),
-      file.path(dsnlayerC, USER_FORTRAN, qmlcasqgz)
-      ,overwrite = TRUE)
+      file.path(dir_fortran_src, qmlcasqgz),
+      file.path(dsnlayerC, USER_FORTRAN, qmlcasqgz),
+      overwrite = TRUE)
   }
 }
 

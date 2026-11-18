@@ -79,6 +79,12 @@ fun_check_exist(OSGeo4W_path,1)
 fun_check_exist(qgis_process,1)
 fun_check_exist(chemin_pputils,1)
 fun_check_exist(telemac_folder,1)
+# Détection et annonce de la version TELEMAC depuis le chemin telemac_folder
+if (exists("telemac_folder") && grepl("9\\.1|v91|v9p1|9\\.1\\.0", as.character(telemac_folder), ignore.case = TRUE)) {
+  cat("TELEMAC Version : v9.1 détectée dans telemac_folder (routines User Fortran du dossier v91 activées)\n")
+} else {
+  cat("TELEMAC Version : standard v8.4 (routines User Fortran par défaut)\n")
+}
 fun_check_exist(BatGRASS,1)
 fun_check_exist(pscp_path,0)
 

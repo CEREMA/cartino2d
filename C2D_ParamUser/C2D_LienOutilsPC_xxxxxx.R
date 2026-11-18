@@ -49,6 +49,8 @@ chemin_pputils <- "C:/Cartino2D/pputils"
 # 5. TELEMAC-2D (Moteur hydrodynamique éléments finis)
 # --------------------------------------------------------------------------------------------------------------------
 # Répertoire d'installation de TELEMAC (ATTENTION : TELEMAC requiert un chemin SANS espace)
+# Exemples : "C:/TELEMAC/V8P4", "C:/openTELEMAC/9.1.0"
+# (Cartino2D détecte automatiquement la v9.1 si le chemin contient '9.1' ou 'v91' et copie les User Fortran de "v91")
 telemac_folder <- "C:/TELEMAC/V8P4"
 
 

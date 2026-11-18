@@ -129,6 +129,10 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
   if (dim(liste)[1]>0){
     for (ih in dim(liste)[1]:1){
       Lignes=readLines(con=file.path(dsnlayerC,nom_Cas))
+      if (exists("is_telemac_v91") && is_telemac_v91()) {
+        # Suppression du mot-clé VALIDATION obsolète sous TELEMAC >= 9.0
+        Lignes <- Lignes[!grepl("^\\s*VALIDATION\\s*=", Lignes)]
+      }
       # la gestion de AMC est juste pour les évèneemnts, ce serait à faire dans shyreg!!!
       
       AMC=2
@@ -600,6 +604,10 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
                        cbind("ANTECEDENT MOISTURE CONDITIONS","ANTECEDENT MOISTURE CONDITIONS           =",AMC))
       
       Lignes=readLines(con=file.path(dsnlayerC,nom_Cas))
+      if (exists("is_telemac_v91") && is_telemac_v91()) {
+        # Suppression du mot-clé VALIDATION obsolète sous TELEMAC >= 9.0
+        Lignes <- Lignes[!grepl("^\\s*VALIDATION\\s*=", Lignes)]
+      }
       
       for (ic in 1:dim(Changement)[1])
       {
@@ -778,9 +786,15 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
           Lignes[lg+1]="/---------------------------------------------------------------------"
           Lignes[lg+2]="/ CONTROL SECTIONS"
           Lignes[lg+3]="/---------------------------------------------------------------------"
-          Lignes[lg+4]="FLUXLINE = YES "
-          Lignes[lg+5]="FLUXLINE INPUT FILE = 'SectControl_Select.txt'"
-          Lignes[lg+6]=paste0("SECTIONS OUTPUT FILE     =",nom_exp_SC)
+          if (exists("is_telemac_v91") && is_telemac_v91()) {
+            # Sous TELEMAC >= 9.0, le mot-clé FLUXLINE=YES a été supprimé (FLUXLINE INPUT FILE suffit)
+            Lignes[lg+4]="FLUXLINE INPUT FILE = 'SectControl_Select.txt'"
+            Lignes[lg+5]=paste0("SECTIONS OUTPUT FILE     =",nom_exp_SC)
+          } else {
+            Lignes[lg+4]="FLUXLINE = YES "
+            Lignes[lg+5]="FLUXLINE INPUT FILE = 'SectControl_Select.txt'"
+            Lignes[lg+6]=paste0("SECTIONS OUTPUT FILE     =",nom_exp_SC)
+          }
         }else{
           Lignes[lg+1]="/---------------------------------------------------------------------"
           Lignes[lg+2]="/ CONTROL SECTIONS"

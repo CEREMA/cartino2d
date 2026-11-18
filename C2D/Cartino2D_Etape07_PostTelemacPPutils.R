@@ -128,8 +128,12 @@ browser()
           nomajeter=paste0("ajeter.txt")
           # Récupération par Telemac
           zzRV=paste0(file.path(dsnlayerC,"RecupVariable.bat"))
-          # write(paste0("CALL ",C:\\TELEMAC\\V8P4,"\\configs\\pysource.bat"               , file = zzRV)
-          write(paste0("CALL ",telemac_folder,"\\configs\\pysource.bat")      , file = zzRV)
+          telemac_env_bat_pp <- if (file.exists(file.path(telemac_folder, "env_openTELEMAC.bat"))) {
+            paste0("CALL ", telemac_folder, "\\env_openTELEMAC.bat")
+          } else {
+            paste0("CALL ", telemac_folder, "\\configs\\pysource.bat")
+          }
+          write(telemac_env_bat_pp, file = zzRV)
           write(""                                                            , file = zzRV, append=T)
           write("SET T2DEXEC=%HOMETEL%\\scripts\\python3\\run_telfile.py"     , file = zzRV, append=T)
           write("SET PATHEXEC=%~dp0"                                          , file = zzRV, append=T)
