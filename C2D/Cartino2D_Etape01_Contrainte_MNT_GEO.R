@@ -115,7 +115,7 @@ Etape1_Contour = function(dsnlayer, contour, crs)
   # gestion de la submersion marine
   dsnSubMar=file.path(dirname(dsnPluie),"_SubMarine",contour$NOMPOST,"BUFFER")
   # contour$SubMar= "H:/Cartino2D_SM/France/_SubMarine/SubMarPACA/BUFFER/C2DMer25_buffer.gpkg"
-  if (exists("dsnSubMar")==T)
+  if (file.exists("dsnSubMar")==T)
   {
     SMBUFFER=list.files(dsnSubMar,full.names = T)
     Zone_SM=st_read(SMBUFFER)
