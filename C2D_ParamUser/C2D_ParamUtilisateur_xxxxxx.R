@@ -326,9 +326,10 @@ raints          <- 15
 # 1 = Sol sec, 2 = Sol moyen/normal, 3 = Sol saturé
 AMC             <- 2
 
-# Fichiers catalogues Excel de métadonnées des rasters radar (laisser vide "" ou nom de fichier) :
-Link_Data       <- "Data_PluieRaster_formation.xlsx"
-Link_DataRADAR  <- "Data_PluieRaster_COMEPHORE.xlsx"
+# Fichier catalogue Excel de métadonnées des rasters radar (situé dans PreC2D/) :
+# Exemples : "Data_PluieRaster_formation.xlsx", "Data_PluieRaster_COMEPHORE.xlsx", "Data_PluieRaster.xlsx"
+Link_DataRADAR  <- "Data_PluieRaster_formation.xlsx"
+Link_Data       <- Link_DataRADAR  # Alias synonyme pour rétro-compatibilité PreC2D
 
 
 ####################################################################################################################

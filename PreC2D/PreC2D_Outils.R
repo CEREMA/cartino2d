@@ -91,7 +91,13 @@ RexPluie_CasPluie=function()
 {
   library(readxl)
   # paste0(chem_routine,"/PreC2D")
-  if (exists("Link_DataRADAR") == FALSE) { Link_DataRADAR = "Data_PluieRaster.xlsx" }
+  if (exists("Link_DataRADAR") == FALSE) {
+    if (exists("Link_Data") == TRUE) {
+      Link_DataRADAR = Link_Data
+    } else {
+      Link_DataRADAR = "Data_PluieRaster.xlsx"
+    }
+  }
   if (file.exists(file.path(chem_routine, "PreC2D", Link_DataRADAR)) == FALSE) { cat("le fichier", file.path(chem_routine, "PreC2D", Link_DataRADAR), "n'existe pas\n"); BOOM = Data_PluieRasterxlsxamettredans }
   Link_DataXLS = read_excel(file.path(chem_routine, "PreC2D", Link_DataRADAR))
   Link_DataXLS = Link_DataXLS[order(Link_DataXLS$NomCas), ]

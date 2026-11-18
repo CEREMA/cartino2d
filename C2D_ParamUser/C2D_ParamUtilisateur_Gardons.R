@@ -184,6 +184,9 @@ nom_Param       <- cbind("Strickler")
 #### 15. PREC2D 4.1 - PLUIES RADAR & STATISTIQUES D'ÉVÉNEMENTS HISTORIQUES #########################################
 ####################################################################################################################
 
+Link_DataRADAR  <- "Data_PluieRaster.xlsx"
+Link_Data       <- Link_DataRADAR
+
 nb_h_avant      <- -1
 nb_h_apres      <- 124
 cumul_min       <- 0
