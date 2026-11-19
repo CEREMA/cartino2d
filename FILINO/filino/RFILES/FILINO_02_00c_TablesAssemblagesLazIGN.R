@@ -1,4 +1,4 @@
-FILINO_00c_TA=function(chem_routine,dsnlayerTA,nomlayerTA,extension,paramXYTA,qgis_process,Doss_ExpRastCount,pdal_exe)
+FILINO_00c_TA=function(dsnlayerTA,nomlayerTA,extension,paramXYTA,qgis_process,Doss_ExpRastCount,pdal_exe)
 {
   cat("\014")
   cat("FILINO_02_00c_TablesAssemblagesLazIGN.R\n")
