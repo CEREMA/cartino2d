@@ -127,12 +127,16 @@ Etape9_PostTelemacPPutils=function()
           nomajeter=paste0("ajeter.txt")
           # Récupération par Telemac
           zzRV=paste0(file.path(dsnlayerC,"RecupVariable.bat"))
-          telemac_env_bat_pp <- if (file.exists(file.path(telemac_folder, "env_openTELEMAC.bat"))) {
-            paste0("CALL ", telemac_folder, "\\env_openTELEMAC.bat")
+          if (exists("build_telemac_env_lines")) {
+            writeLines(build_telemac_env_lines(telemac_folder), con = zzRV)
           } else {
-            paste0("CALL ", telemac_folder, "\\configs\\pysource.bat")
+            telemac_env_bat_pp <- if (file.exists(file.path(telemac_folder, "env_openTELEMAC.bat"))) {
+              paste0("CALL ", gsub("/", "\\\\", telemac_folder), "\\env_openTELEMAC.bat")
+            } else {
+              paste0("CALL ", gsub("/", "\\\\", telemac_folder), "\\configs\\pysource.bat")
+            }
+            write(telemac_env_bat_pp, file = zzRV)
           }
-          write(telemac_env_bat_pp, file = zzRV)
           write(""                                                            , file = zzRV, append=T)
           write("SET T2DEXEC=%HOMETEL%\\scripts\\python3\\run_telfile.py"     , file = zzRV, append=T)
           write("SET PATHEXEC=%~dp0"                                          , file = zzRV, append=T)
@@ -140,7 +144,7 @@ Etape9_PostTelemacPPutils=function()
           write("cd %PATHEXEC%"                                               , file = zzRV, append=T)
           write(""                                                            , file = zzRV, append=T)
           write(paste0("python %T2DEXEC% scan ",listeRES[ires], " > ",nomajeter), file = zzRV, append=T)
-          write("cmd /k "                                                     , file = zzRV, append=T)
+          write("exit /b 0"                                                   , file = zzRV, append=T)
           setwd(dsnlayerC)
           toto=system(zzRV)
           
@@ -165,10 +169,19 @@ Etape9_PostTelemacPPutils=function()
           
           # Convertir la date de base en objet POSIXct
           DateBase_POSIXct <- as.POSIXct(DateBase, format = "%Y-%m-%d %H:%M:%S")
-          # Ajouter la durée en secondes à la date de base
-          DateFinal <- DateBase_POSIXct + Tempsfinal
-          # Formater la date finale au format souhaité
-          DateFinal_formatted <- format(DateFinal, format = "%Y-%m-%dT%H:%M:%SZ")
+          # Arrondir Tempsfinal à la seconde la plus proche (évite la troncature virgule flottante)
+          # et préparer des timestamps candidats (+/- 1s, +/- 2s) si QGIS/MDAL décale d'1 seconde
+          temps_candidats <- unique(c(
+            round(Tempsfinal),
+            round(Tempsfinal) - 1,
+            round(Tempsfinal) + 1,
+            floor(Tempsfinal),
+            ceiling(Tempsfinal),
+            round(Tempsfinal) - 2,
+            round(Tempsfinal) + 2
+          ))
+          Dates_candidates <- format(DateBase_POSIXct + temps_candidats, format = "%Y-%m-%dT%H:%M:%SZ")
+          DateFinal_formatted <- Dates_candidates[1]
           
           # for (iparam in 1:nbreparam){codeparam=ifelse(iparam==1,0,paste0(codeparam,",",iparam-1))}
           
@@ -217,16 +230,39 @@ Etape9_PostTelemacPPutils=function()
                 }
                 # =====================================================================
                 nomsortieBrutTIF=paste0(dsnlayerC_,"\\",nomres,"_",extsortie,"_BrutTIF.tif")
-                cmd <- paste0(qgis_process, " run native:meshrasterize",
-                              " --INPUT=",shQuote(listeRES[ires]),
-                              " --EXTENT=",xmin,",",xmax,",",ymin,",",ymax,
-                              " --DATASET_GROUPS=",iparam-1+decaligroup,
-                              " --DATASET_TIME=",shQuote(DateFinal_formatted),
-                              " --EPSG=",EPSG,
-                              " --PIXEL_SIZE=",cellsize,
-                              " --OUTPUT=",nomsortieBrutTIF)#,
-                # " > NUL 2>&1")
-                print(cmd);toto=system(cmd)
+                dates_a_tester <- unique(c(DateFinal_formatted, Dates_candidates))
+                rasterize_ok <- FALSE
+                for (dt_try in dates_a_tester) {
+                  if (file.exists(nomsortieBrutTIF)) unlink(nomsortieBrutTIF)
+                  cmd <- paste0(qgis_process, " run native:meshrasterize",
+                                " --INPUT=",shQuote(listeRES[ires]),
+                                " --EXTENT=",xmin,",",xmax,",",ymin,",",ymax,
+                                " --DATASET_GROUPS=",iparam-1+decaligroup,
+                                " --DATASET_TIME=",shQuote(dt_try),
+                                " --EPSG=",EPSG,
+                                " --PIXEL_SIZE=",cellsize,
+                                " --OUTPUT=",nomsortieBrutTIF)
+                  print(cmd); toto=system(cmd)
+                  tif_valide <- file.exists(nomsortieBrutTIF) && isTRUE(file.info(nomsortieBrutTIF)$size > 0)
+                  if (tif_valide) {
+                    # Vérifier que le raster n'est pas entièrement vide (tout NA si timestamp hors plage)
+                    tif_valide <- tryCatch(any(!is.na(raster::values(raster::raster(nomsortieBrutTIF)))), error = function(e) FALSE)
+                  }
+                  if (tif_valide) {
+                    if (dt_try != DateFinal_formatted) {
+                      cat("[Étape 7] Timestamp ajusté automatiquement pour QGIS :", dt_try, "(au lieu de", DateFinal_formatted, ")\n")
+                      DateFinal_formatted <- dt_try
+                    }
+                    rasterize_ok <- TRUE
+                    break
+                  } else {
+                    cat("[Étape 7] Échec ou raster vide avec DATASET_TIME =", dt_try, "-> essai suivant...\n")
+                  }
+                }
+                if (!rasterize_ok) {
+                  cat("[Étape 7] ERREUR : native:meshrasterize a échoué pour toutes les dates candidates autour de", Tempsfinal, "s\n")
+                  next
+                }
                 
                 nomsortieBrutTIF_decalXY=paste0(dsnlayerC_,"\\",nomres,"_",extsortie,"_BrutTIF_decalXY.tif")
                 

@@ -416,10 +416,10 @@ Etape4_Cas_Hyeto=function(dsnlayerC,nom_Cas,dsnPluie,contour)
         VGP="U,V,B,H,Z,M,F,Q,MAXZ,TMXZ,MAXV,TMXV"
       }else if(contour$PRINTPERIO==-1){
         # reste que les données aggregées VARIABLES FOR GRAPHIC PRINTOUTS =B,MAXZ,TMXZ,MAXV pour tous sauf 10 et 100
-        GPP=DUREE*3600/contour$TIME_STEP
+        GPP=round(DUREE*3600/contour$TIME_STEP)
         VGP="B,MAXZ,TMXZ,MAXV,TMXV"
       }else{
-        GPP=DUREE*3600/contour$TIME_STEP
+        GPP=round(DUREE*3600/contour$TIME_STEP)
         VGP="U,V,B,H,Z,M,F,Q"
       }
       

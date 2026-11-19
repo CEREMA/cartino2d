@@ -108,7 +108,6 @@
       IF(LT.EQ.0) THEN
         IMP=.TRUE.
         LEO=.TRUE.
-        COMPLEO=0
       ELSE
         IF(EQUA(1:15).NE.'SAINT-VENANT VF') THEN
 !         FEM
@@ -117,8 +116,6 @@
           LTT=(LT/LEOPRD)*LEOPRD
           IF(LT.EQ.LTT.AND.LT.GE.PTINIG) LEO=.TRUE.
           IF(ABS(AT-(DUREE+AT0)).LT.1.E-14)LEO=.TRUE.
-!         FOR GRAPHICAL OUTPUTS
-          IF(LEO)COMPLEO=COMPLEO+1
         ELSE
 !         FVM
           IF(LT.GT.PTINIL)THEN
@@ -132,8 +129,6 @@
               IMP=.TRUE.
             ENDIF
           ENDIF
-!         FOR GRAPHICAL OUTPUTS
-          IF(LEO)COMPLEO=COMPLEO+1
         ENDIF
       ENDIF
 !

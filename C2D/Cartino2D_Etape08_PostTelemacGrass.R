@@ -25,7 +25,6 @@ Etape10_PostTelemacGrass=function()
         # toto=system(paste0(BatGRASS," -c EPSG:",EPSG," ",dirname(SecteurGRASS)," --text"))
         # if (toto!=0){cat("Vous avez un problème dans ",BatGRASS,"\n");BUGDEGRASS=BOOM}
         # system(paste0(BatGRASS," -c ",SecteurGRASS," --text"))
-        browser()
         # Creation propre d'un monde GRASS à 3 niveaux : GISDBASE / LOCATION / MAPSET
         loc_name = paste0("Post_", basename(dsnlayerC), "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
         SecteurGRASS = file.path(dirname(dirname(SecteurGRASS_)), loc_name, "PERMANENT")
