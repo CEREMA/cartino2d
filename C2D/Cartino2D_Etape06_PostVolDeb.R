@@ -41,7 +41,7 @@ Etape8_PostVolDeb = function(dsnlayerC, nomcontour) {
       
       if (file.exists(file.path(dsnlayerC, substr(nomsortie, 1, nchar(nomsortie)-30))) == T) {
         filenamejpg = file.path(dsnlayerC, paste0(substr(nomsortie, 1, nchar(nomsortie)-7), ".jpg"))
-        if (!file.exists(filenamejpg)) {
+        if (!file.exists(filenamejpg) | file.exists(filenamejpg)) {
           Lignes = readLines(con = file.path(dsnlayerC, substr(nomsortie, 1, nchar(nomsortie)-30)))
           
           RecupTps = rbind("TIME STEP ")
